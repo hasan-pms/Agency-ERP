@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { Payment, VendorBill, User, Vendor, Company } from '../types';
-import { CheckCircle, XCircle, RefreshCw, Send, DollarSign, ArrowUpRight } from 'lucide-react';
+import { CheckCircle, XCircle, RefreshCw, Send, DollarSign, ArrowUpRight, Search, SlidersHorizontal, X } from 'lucide-react';
 
 interface PaymentsModuleProps {
   payments: Payment[];
@@ -37,6 +37,31 @@ export default function PaymentsModule({
   const [customAmount, setCustomAmount] = useState<number>(0);
 
   const [syncingId, setSyncingId] = useState<string | null>(null);
+
+  // Search & Filter States
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+
+  const filteredPayments = payments.filter(pay => {
+    const term = searchTerm.toLowerCase().trim();
+    
+    const matchesSearch = !term ||
+      pay.id.toLowerCase().includes(term) ||
+      (pay.vendorBillId && pay.vendorBillId.toLowerCase().includes(term)) ||
+      (pay.checkWireDetails && pay.checkWireDetails.toLowerCase().includes(term));
+
+    const matchesStatus = statusFilter === 'ALL' || pay.status === statusFilter;
+
+    const matchesMinAmount = !minAmount || pay.amount >= Number(minAmount);
+    const matchesMaxAmount = !maxAmount || pay.amount <= Number(maxAmount);
+
+    return matchesSearch && matchesStatus && matchesMinAmount && matchesMaxAmount;
+  });
+
+  const activeFiltersCount = (statusFilter !== 'ALL' ? 1 : 0) + (minAmount ? 1 : 0) + (maxAmount ? 1 : 0);
 
   // Column width resizing state and handler
   const [colWidths, setColWidths] = useState<Record<string, number>>({
@@ -137,6 +162,104 @@ export default function PaymentsModule({
         )}
       </div>
 
+      {/* Elegant Search & Filter Panel */}
+      <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-xs space-y-3">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <input
+              type="text"
+              placeholder="Search by payment reference, linked bill reference, details, or vendor name..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-400"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-2.5 hover:text-zinc-600 text-zinc-400 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-all cursor-pointer ${
+              showFilters || activeFiltersCount > 0
+                ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-xs'
+                : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>Filters</span>
+            {activeFiltersCount > 0 && (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">
+                {activeFiltersCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Expandable Advanced Filters */}
+        {showFilters && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-zinc-100 animate-fadeIn text-xs">
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Payment Status</label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="DRAFT">Draft</option>
+                <option value="PENDING_APPROVAL">Pending Approval</option>
+                <option value="APPROVED">Approved</option>
+                <option value="PAID">Paid</option>
+                <option value="REJECTED">Rejected</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Min Amount ({company.currency || 'BDT'})</label>
+              <input
+                type="number"
+                placeholder="Min amount dispatched..."
+                value={minAmount}
+                onChange={(e) => setMinAmount(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Max Amount ({company.currency || 'BDT'})</label>
+              <input
+                type="number"
+                placeholder="Max amount dispatched..."
+                value={maxAmount}
+                onChange={(e) => setMaxAmount(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+          </div>
+        )}
+
+        {(searchTerm || activeFiltersCount > 0) && (
+          <div className="flex justify-between items-center text-xs text-zinc-500 pt-1">
+            <span>Found <strong>{filteredPayments.length}</strong> matching payments</span>
+            <button
+              onClick={() => {
+                setSearchTerm('');
+                setStatusFilter('ALL');
+                setMinAmount('');
+                setMaxAmount('');
+              }}
+              className="text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer"
+            >
+              Reset Filters
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Grid listing payments */}
       <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
@@ -195,7 +318,12 @@ export default function PaymentsModule({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 text-zinc-700">
-              {payments.map(pay => {
+              {filteredPayments.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-8 text-center text-zinc-400 italic">No payments match your search/filter criteria.</td>
+                </tr>
+              ) : (
+                filteredPayments.map(pay => {
                 const targetBill = bills.find(b => b.id === pay.vendorBillId);
                 return (
                   <tr key={pay.id} className="hover:bg-zinc-50/50 transition-colors">
@@ -264,7 +392,7 @@ export default function PaymentsModule({
                     </td>
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>

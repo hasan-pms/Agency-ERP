@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "Enterprise Operations Portal",
+  "description": "A comprehensive financial operations portal featuring client registry, project tracking, vendor invoicing, VAT audits, and manager-subordinate document hierarchies.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

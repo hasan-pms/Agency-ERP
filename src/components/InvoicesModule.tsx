@@ -15,6 +15,8 @@ import {
   Pencil, 
   Trash2, 
   X, 
+  Search,
+  SlidersHorizontal,
   Check, 
   Printer, 
   AlertTriangle, 
@@ -121,6 +123,51 @@ export default function InvoicesModule({
   const [simulatedReceiptUrl, setSimulatedReceiptUrl] = useState('');
   const [receiptingInvId, setReceiptingInvId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+
+  // Search & Filter States
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+
+  const filteredInvoices = invoices.filter(inv => {
+    const term = searchTerm.toLowerCase().trim();
+    
+    // Resolve linked estimates and their client names
+    const linkedEstimates = (inv.estimateIds || []).map(id => estimates.find(e => e.id === id)).filter(Boolean);
+    const clientNamesStr = linkedEstimates.map(e => e?.clientName || '').join(' ').toLowerCase();
+    
+    const description = inv.lineItems?.some(li => li.description && li.description.toLowerCase().includes(term));
+    const estimateIdsStr = (inv.estimateIds || []).join(' ').toLowerCase();
+
+    const matchesSearch = !term ||
+      inv.id.toLowerCase().includes(term) ||
+      clientNamesStr.includes(term) ||
+      estimateIdsStr.includes(term) ||
+      description;
+
+    const matchesStatus = statusFilter === 'ALL' || inv.status === statusFilter;
+
+    const matchesMinAmount = !minAmount || inv.totalAmount >= Number(minAmount);
+    const matchesMaxAmount = !maxAmount || inv.totalAmount <= Number(maxAmount);
+
+    let matchesDate = true;
+    if (startDate) {
+      matchesDate = matchesDate && new Date(inv.createdAt) >= new Date(startDate);
+    }
+    if (endDate) {
+      const eDate = new Date(endDate);
+      eDate.setHours(23, 59, 59, 999);
+      matchesDate = matchesDate && new Date(inv.createdAt) <= eDate;
+    }
+
+    return matchesSearch && matchesStatus && matchesMinAmount && matchesMaxAmount && matchesDate;
+  });
+
+  const activeFiltersCount = (statusFilter !== 'ALL' ? 1 : 0) + (minAmount ? 1 : 0) + (maxAmount ? 1 : 0) + (startDate ? 1 : 0) + (endDate ? 1 : 0);
 
   // Handle preselected estimates from Estimates page converting
   useEffect(() => {
@@ -431,6 +478,122 @@ export default function InvoicesModule({
         )}
       </div>
 
+      {/* Elegant Search & Filter Panel */}
+      <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-xs space-y-3">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <input
+              type="text"
+              placeholder="Search by invoice ID, client name, linked estimates, or line description..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-400"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-2.5 hover:text-zinc-600 text-zinc-400 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-all cursor-pointer ${
+              showFilters || activeFiltersCount > 0
+                ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-xs'
+                : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>Filters</span>
+            {activeFiltersCount > 0 && (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">
+                {activeFiltersCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Expandable Advanced Filters */}
+        {showFilters && (
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 pt-3 border-t border-zinc-100 animate-fadeIn text-xs">
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Invoice Status</label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="DRAFT">Draft</option>
+                <option value="SENT">Sent</option>
+                <option value="PAID">Paid</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Min Amount ({company.currency || 'BDT'})</label>
+              <input
+                type="number"
+                placeholder="Min amount..."
+                value={minAmount}
+                onChange={(e) => setMinAmount(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Max Amount ({company.currency || 'BDT'})</label>
+              <input
+                type="number"
+                placeholder="Max amount..."
+                value={maxAmount}
+                onChange={(e) => setMaxAmount(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Start Date</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-xs"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">End Date</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-xs"
+              />
+            </div>
+          </div>
+        )}
+
+        {(searchTerm || activeFiltersCount > 0) && (
+          <div className="flex justify-between items-center text-xs text-zinc-500 pt-1">
+            <span>Found <strong>{filteredInvoices.length}</strong> matching invoices</span>
+            <button
+              onClick={() => {
+                setSearchTerm('');
+                setStatusFilter('ALL');
+                setMinAmount('');
+                setMaxAmount('');
+                setStartDate('');
+                setEndDate('');
+              }}
+              className="text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer"
+            >
+              Reset Filters
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm border-collapse" style={{ tableLayout: 'fixed', minWidth: tableMinWidth }}>
@@ -502,12 +665,12 @@ export default function InvoicesModule({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 text-zinc-700">
-              {invoices.length === 0 ? (
+              {filteredInvoices.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="p-8 text-center text-zinc-400 italic">No invoices issued yet.</td>
+                  <td colSpan={9} className="p-8 text-center text-zinc-400 italic">No invoices match your filter criteria.</td>
                 </tr>
               ) : (
-                invoices.map((inv) => {
+                filteredInvoices.map((inv) => {
                   const isPaid = inv.status === 'PAID';
                   const isSent = inv.status === 'SENT';
                   const isDraft = inv.status === 'DRAFT';

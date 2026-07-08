@@ -162,14 +162,14 @@ export const INITIAL_COMPANIES: Company[] = [
 ];
 
 export const INITIAL_USERS: User[] = [
-  { id: 'user-m-admin', name: 'Master Overlord', email: 'master@saaserp.com', role: UserRole.MASTER_ADMIN, status: 'ACTIVE', companyId: 'comp-acme' },
-  { id: 'user-admin', name: 'Hasan Developer (Admin)', email: 'hasan24h@gmail.com', role: UserRole.ADMIN, status: 'ACTIVE', companyId: 'comp-acme' },
-  { id: 'user-cs-u', name: 'Sarah CS Representative', email: 'sarah.cs@acme.com', role: UserRole.CS_USER, status: 'ACTIVE', companyId: 'comp-acme' },
-  { id: 'user-cs-m', name: 'Robert CS Manager', email: 'robert.mgr@acme.com', role: UserRole.CS_MANAGER, status: 'ACTIVE', companyId: 'comp-acme' },
-  { id: 'user-fin-u', name: 'Emily Accounts Controller', email: 'emily.finance@acme.com', role: UserRole.FINANCE_USER, status: 'ACTIVE', companyId: 'comp-acme' },
-  { id: 'user-fin-m', name: 'Jonathan Finance Director', email: 'jonathan.dir@acme.com', role: UserRole.FINANCE_MANAGER, status: 'ACTIVE', companyId: 'comp-acme' },
-  { id: 'user-vat', name: 'Inspector Somchai (VAT Dept)', email: 'somchai.vat@revenue.go', role: UserRole.VAT_DEPT_USER, status: 'ACTIVE', companyId: 'comp-acme' },
-  { id: 'user-vend-port', name: 'En enlisted Global Builder Inc', email: 'vendor@globalbuilders.com', role: UserRole.VENDOR, status: 'ACTIVE', companyId: 'comp-acme' }
+  { id: 'user-m-admin', name: 'Master Overlord', email: 'master@saaserp.com', role: UserRole.MASTER_ADMIN, status: 'ACTIVE', companyId: 'comp-acme', password: 'masterpassword' },
+  { id: 'user-admin', name: 'Hasan Developer (Admin)', email: 'hasan24h@gmail.com', role: UserRole.ADMIN, status: 'ACTIVE', companyId: 'comp-acme', password: 'adminpassword' },
+  { id: 'user-cs-u', name: 'Sarah CS Representative', email: 'sarah.cs@acme.com', role: UserRole.CS_USER, status: 'ACTIVE', companyId: 'comp-acme', password: 'password123', managerId: 'user-cs-m' },
+  { id: 'user-cs-m', name: 'Robert CS Manager', email: 'robert.mgr@acme.com', role: UserRole.CS_MANAGER, status: 'ACTIVE', companyId: 'comp-acme', password: 'password123' },
+  { id: 'user-fin-u', name: 'Emily Accounts Controller', email: 'emily.finance@acme.com', role: UserRole.FINANCE_USER, status: 'ACTIVE', companyId: 'comp-acme', password: 'password123' },
+  { id: 'user-fin-m', name: 'Jonathan Finance Director', email: 'jonathan.dir@acme.com', role: UserRole.FINANCE_MANAGER, status: 'ACTIVE', companyId: 'comp-acme', password: 'password123' },
+  { id: 'user-vat', name: 'Inspector Somchai (VAT Dept)', email: 'somchai.vat@revenue.go', role: UserRole.VAT_DEPT_USER, status: 'ACTIVE', companyId: 'comp-acme', password: 'password123' },
+  { id: 'user-vend-port', name: 'En enlisted Global Builder Inc', email: 'vendor@globalbuilders.com', role: UserRole.VENDOR, status: 'ACTIVE', companyId: 'comp-acme', password: 'password123' }
 ];
 
 export const INITIAL_PROJECTS: Project[] = [

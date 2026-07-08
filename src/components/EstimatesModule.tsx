@@ -4,8 +4,8 @@
  */
 
 import React, { useState } from 'react';
-import { Estimate, Project, User, EstimateLineItem, Company, Client, UserRole } from '../types';
-import { FileText, Plus, Trash2, Eye, RefreshCw, CheckCircle, XCircle, Sparkles, Building, ChevronDown, ChevronUp, Pencil, ShieldAlert, Users, Check, Clock } from 'lucide-react';
+import { Estimate, Project, User, EstimateLineItem, Company, Client, UserRole, LaborRate, LaborBreakdownItem } from '../types';
+import { FileText, Plus, Trash2, Eye, RefreshCw, CheckCircle, XCircle, Sparkles, Building, ChevronDown, ChevronUp, Pencil, ShieldAlert, Users, Check, Clock, Search, SlidersHorizontal, X, Menu } from 'lucide-react';
 
 interface EstimatesModuleProps {
   estimates: Estimate[];
@@ -13,6 +13,8 @@ interface EstimatesModuleProps {
   currentUser: User;
   company: Company;
   clients: Client[];
+  isSidebarHidden?: boolean;
+  onToggleSidebar?: () => void;
   onCreateClient: (client: Omit<Client, 'id' | 'companyId' | 'isApproved' | 'createdBy'>) => void;
   onApproveClient: (clientId: string) => void;
   onCreateEstimate: (estimate: Omit<Estimate, 'id' | 'companyId' | 'createdAt'>) => void;
@@ -24,6 +26,7 @@ interface EstimatesModuleProps {
   onCreateProject?: (project: Omit<Project, 'companyId' | 'costIncurred' | 'revenueRecognized'> & { id?: string }) => void;
   onLinkProjectToEstimate?: (estimateId: string, projectId: string, selectedLineItemIds: string[]) => void;
   onConvertToInvoice?: (estimateId: string) => void;
+  laborRates?: LaborRate[];
 }
 
 export default function EstimatesModule({
@@ -32,6 +35,8 @@ export default function EstimatesModule({
   currentUser,
   company,
   clients,
+  isSidebarHidden,
+  onToggleSidebar,
   onCreateClient,
   onApproveClient,
   onCreateEstimate,
@@ -42,7 +47,8 @@ export default function EstimatesModule({
   onSyncQBO,
   onCreateProject,
   onLinkProjectToEstimate,
-  onConvertToInvoice
+  onConvertToInvoice,
+  laborRates = []
 }: EstimatesModuleProps) {
   const [showNewModal, setShowNewModal] = useState(false);
   const [editingEst, setEditingEst] = useState<Estimate | null>(null);
@@ -68,6 +74,59 @@ export default function EstimatesModule({
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [newClientName, setNewClientName] = useState('');
   const [newClientAddress, setNewClientAddress] = useState('');
+
+  // Search & Filter States
+  const [searchTerm, setSearchTerm] = useState('');
+  const [clientSearchTerm, setClientSearchTerm] = useState('');
+  const [estimateStatus, setEstimateStatus] = useState<string>('ALL');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+
+  const filteredEstimates = estimates.filter(est => {
+    const term = searchTerm.toLowerCase().trim();
+    const proj = projects.find(p => p.id === est.projectId);
+    const matchesSearch = !term ||
+      est.id.toLowerCase().includes(term) ||
+      (est.clientName && est.clientName.toLowerCase().includes(term)) ||
+      (proj && proj.name.toLowerCase().includes(term)) ||
+      est.lineItems.some(li => li.description && li.description.toLowerCase().includes(term));
+    
+    let matchesStatus = true;
+    if (estimateStatus !== 'ALL') {
+      const isFullyApproved = est.csManagerApproved && est.financeApproved;
+      const statusStr = est.clientStatus === 'REJECTED' ? 'REJECTED' :
+                       isFullyApproved ? 'APPROVED' : 'AWAITING APPROVAL';
+      matchesStatus = statusStr === estimateStatus || est.clientStatus === estimateStatus;
+    }
+
+    const matchesMinAmount = !minAmount || est.totalAmount >= Number(minAmount);
+    const matchesMaxAmount = !maxAmount || est.totalAmount <= Number(maxAmount);
+
+    let matchesDate = true;
+    if (startDate) {
+      matchesDate = matchesDate && new Date(est.createdAt) >= new Date(startDate);
+    }
+    if (endDate) {
+      const eDate = new Date(endDate);
+      eDate.setHours(23, 59, 59, 999);
+      matchesDate = matchesDate && new Date(est.createdAt) <= eDate;
+    }
+
+    return matchesSearch && matchesStatus && matchesMinAmount && matchesMaxAmount && matchesDate;
+  });
+
+  const filteredClients = clients.filter(c => {
+    const term = clientSearchTerm.toLowerCase().trim();
+    return !term ||
+      c.name.toLowerCase().includes(term) ||
+      (c.address && c.address.toLowerCase().includes(term)) ||
+      c.id.toLowerCase().includes(term);
+  });
+
+  const activeFiltersCount = (estimateStatus !== 'ALL' ? 1 : 0) + (minAmount ? 1 : 0) + (maxAmount ? 1 : 0) + (startDate ? 1 : 0) + (endDate ? 1 : 0);
 
   const [activePreviewHTML, setActivePreviewHTML] = useState<string | null>(null);
   const [activePreviewTitle, setActivePreviewTitle] = useState('');
@@ -122,6 +181,7 @@ export default function EstimatesModule({
   const recalculateLineItems = (items: any[]): any[] => {
     return items.map((item, idx) => {
       const isAgencyFee = !!item.isAgencyFee;
+      const isReimbursementLabor = !!item.isReimbursementLabor;
       const vatRate = item.vatRate !== undefined ? item.vatRate : 15;
       
       if (isAgencyFee) {
@@ -170,6 +230,55 @@ export default function EstimatesModule({
           agencyFeeRate,
           selectedLineIndices: selectedIndices
         };
+      } else if (isReimbursementLabor) {
+        const laborItems = (item.laborItems || []).map((labor: any) => {
+          const fteStr = labor.ftePercentage || '';
+          const numericFte = parseFloat(fteStr.replace('%', '').trim());
+          let hours = labor.hours;
+          if (!isNaN(numericFte)) {
+            hours = Math.ceil(20.417 * 8 * (numericFte / 100));
+          } else {
+            hours = 0;
+          }
+          const hourlyRate = labor.hourlyRate !== undefined ? Number(labor.hourlyRate) : 0;
+          const amount = hourlyRate * hours;
+          return {
+            ...labor,
+            hours,
+            amount
+          };
+        });
+        const subtotal = laborItems.reduce((acc: number, labor: any) => acc + (Number(labor.amount) || 0), 0);
+        const inputMode = item.discountInputMode || 'percentage';
+        let discountPercentage = item.discountPercentage !== undefined ? Number(item.discountPercentage) : 0;
+        let discountAmount = item.discountAmount !== undefined ? Number(item.discountAmount) : 0;
+
+        if (inputMode === 'amount') {
+          discountPercentage = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
+        } else {
+          discountAmount = subtotal * (discountPercentage / 100);
+        }
+
+        const qty = 1;
+        const rate = subtotal - discountAmount;
+        const amount = subtotal - discountAmount;
+        const vatAmount = amount * (vatRate / 100);
+        const grandTotal = amount + vatAmount;
+        
+        return {
+          ...item,
+          qty,
+          rate,
+          amount,
+          vatRate,
+          vatAmount,
+          grandTotal,
+          description: item.description || 'Reimbursement Direct Labor Cost',
+          laborItems,
+          discountPercentage,
+          discountAmount,
+          discountInputMode: inputMode
+        };
       } else {
         const qty = item.qty !== undefined ? item.qty : 1;
         const rate = item.rate !== undefined ? item.rate : 0;
@@ -214,10 +323,48 @@ export default function EstimatesModule({
     const updated = [...lineItems];
     const item = { ...updated[idx] };
     
-    if (field === 'isAgencyFee') {
+    if (field === 'lineType') {
+      const type = value as string;
+      if (type === 'STANDARD') {
+        item.isAgencyFee = false;
+        item.isReimbursementLabor = false;
+        item.qty = 1;
+        item.rate = 0;
+        item.amount = 0;
+        item.selectedLineIndices = [];
+        item.laborItems = [];
+      } else if (type === 'AGENCY') {
+        item.isAgencyFee = true;
+        item.isReimbursementLabor = false;
+        item.qty = 1;
+        item.agencyFeeRate = item.agencyFeeRate ?? 10;
+        // select all preceding items by default
+        item.selectedLineIndices = Array.from({ length: idx }, (_, i) => i);
+        item.description = ''; // Force regeneration of description
+        item.laborItems = [];
+      } else if (type === 'REIMBURSEMENT_LABOR') {
+        item.isAgencyFee = false;
+        item.isReimbursementLabor = true;
+        item.qty = 1;
+        item.selectedLineIndices = [];
+        item.description = item.description || 'Reimbursement Direct Labor Cost';
+        if (!item.laborItems || item.laborItems.length === 0) {
+          item.laborItems = [
+            { id: 'labor-1', department: 'Planning Department', designation: 'Planning Executive', ftePercentage: '6%', hourlyRate: 546, hours: 10, amount: 5460 },
+            { id: 'labor-2', department: 'Account Management', designation: 'Account Manager', ftePercentage: '5%', hourlyRate: 1241, hours: 9, amount: 11169 },
+            { id: 'labor-3', department: 'Account Management', designation: 'Account Executive', ftePercentage: '50%', hourlyRate: 546, hours: 82, amount: 44772 },
+            { id: 'labor-4', department: 'Content Development (Art Department)', designation: 'Animator 01', ftePercentage: '50%', hourlyRate: 745, hours: 82, amount: 61090 },
+            { id: 'labor-5', department: 'Content Development (Art Department)', designation: 'Visualizer 01', ftePercentage: '50%', hourlyRate: 546, hours: 82, amount: 44772 },
+            { id: 'labor-6', department: 'Content Development (Copy Department)', designation: 'Copy Supervisor', ftePercentage: '5%', hourlyRate: 1489, hours: 9, amount: 13401 },
+            { id: 'labor-7', department: 'Content Development (Copy Department)', designation: 'Copywriter', ftePercentage: '31%', hourlyRate: 546, hours: 51, amount: 27846 }
+          ];
+        }
+      }
+    } else if (field === 'isAgencyFee') {
       const checked = !!value;
       item.isAgencyFee = checked;
       if (checked) {
+        item.isReimbursementLabor = false;
         item.qty = 1;
         item.agencyFeeRate = item.agencyFeeRate ?? 10;
         // select all preceding items by default
@@ -292,11 +439,35 @@ export default function EstimatesModule({
         };
       });
 
+      const isClientNameEqual = selectedClientName === (editingEst.clientName || '');
+      const isSameLineItems = lineItems.length === editingEst.lineItems.length && lineItems.every((item, idx) => {
+        const orig = editingEst.lineItems[idx];
+        if (!orig) return false;
+        const isAgencyFeeEqual = (item.isAgencyFee || false) === (orig.isAgencyFee || false);
+        const selectedIndicesEqual = JSON.stringify(item.selectedLineIndices || []) === JSON.stringify(orig.selectedLineIndices || []);
+        return item.description === orig.description &&
+          Number(item.qty) === Number(orig.qty) &&
+          Number(item.rate) === Number(orig.rate) &&
+          Number(item.amount) === Number(orig.amount) &&
+          Number(item.vatRate ?? 15) === Number(orig.vatRate ?? 15) &&
+          isAgencyFeeEqual &&
+          Number(item.agencyFeeRate ?? 10) === Number(orig.agencyFeeRate ?? 10) &&
+          selectedIndicesEqual;
+      });
+
+      const hasChanges = !isClientNameEqual || !isSameLineItems;
+
       if (onEditEstimate) {
         onEditEstimate(editingEst.id, {
           clientName: selectedClientName,
           lineItems: itemsWithProject as any,
-          totalAmount: calculateTotal()
+          totalAmount: calculateTotal(),
+          ...(hasChanges ? {} : {
+            csManagerApproved: editingEst.csManagerApproved,
+            financeApproved: editingEst.financeApproved,
+            clientStatus: editingEst.clientStatus,
+            rejectionNotes: editingEst.rejectionNotes
+          })
         });
       }
       setEditingEst(null);
@@ -388,7 +559,7 @@ export default function EstimatesModule({
 
   const handleShowTemplate = (est: Estimate) => {
     const proj = projects.find(p => p.id === est.projectId);
-    const client = clients.find(c => c.name.toLowerCase() === proj?.clientName.toLowerCase());
+    const client = clients.find(c => c.name.toLowerCase() === proj?.clientName.toLowerCase() || c.name.toLowerCase() === est.clientName?.toLowerCase());
     const clientAddress = client ? client.address : 'No address on file';
     const template = company.templates.estimateTemplate || '';
 
@@ -421,7 +592,7 @@ export default function EstimatesModule({
     let populated = template
       .replace('{{companyName}}', company.name)
       .replace('{{estimateId}}', est.id)
-      .replace('{{clientName}}', proj?.clientName || 'N/A')
+      .replace('{{clientName}}', proj?.clientName || est.clientName || 'N/A')
       .replace('{{clientAddress}}', clientAddress)
       .replace('{{projectName}}', proj?.name || 'N/A')
       .replace('{{dateCreated}}', new Date(est.createdAt || Date.now()).toLocaleDateString())
@@ -431,9 +602,101 @@ export default function EstimatesModule({
     // Fallback if template doesn't contain {{clientAddress}} placeholder
     if (!template.includes('{{clientAddress}}')) {
       populated = populated.replace(
-        `class="text-zinc-600 mt-1">${proj?.clientName || 'N/A'}</p>`,
-        `class="text-zinc-600 mt-1">${proj?.clientName || 'N/A'}</p>\n      <p class="text-zinc-500 italic text-[11px]">${clientAddress}</p>`
+        `class="text-zinc-600 mt-1">${proj?.clientName || est.clientName || 'N/A'}</p>`,
+        `class="text-zinc-600 mt-1">${proj?.clientName || est.clientName || 'N/A'}</p>\n      <p class="text-zinc-500 italic text-[11px]">${clientAddress}</p>`
       );
+    }
+
+    // Append Direct Labor Cost Breakdown Page
+    const laborLineItems = est.lineItems.filter(item => item.isReimbursementLabor && item.laborItems && item.laborItems.length > 0);
+    if (laborLineItems.length > 0) {
+      const breakdownHTML = `
+        <div class="p-8 font-sans border-2 border-zinc-200 rounded-lg bg-white mt-8" style="page-break-before: always; break-before: page;">
+          <div class="flex justify-between border-b pb-6">
+            <div>
+              <h1 class="text-3xl font-extrabold text-indigo-600 tracking-tight">${company.name}</h1>
+              <p class="text-xs text-zinc-500 mt-1">SaaS ERP Commercial Division</p>
+            </div>
+            <div class="text-right">
+              <h2 class="text-xl font-bold text-zinc-800">DIRECT LABOR BREAKDOWN</h2>
+              <p class="text-xs text-zinc-500">Ref: ${est.id}</p>
+            </div>
+          </div>
+          <div class="my-6 grid grid-cols-2 gap-4 text-xs">
+            <div>
+              <p class="font-semibold text-zinc-700">PREPARED FOR:</p>
+              <p class="text-zinc-600 mt-1 font-bold">${proj?.clientName || est.clientName || 'N/A'}</p>
+              <p class="text-zinc-500 mt-0.5 italic text-[11px]">${clientAddress}</p>
+              <p class="text-zinc-600 mt-1">Project: ${proj?.name || 'N/A'}</p>
+            </div>
+            <div class="text-right">
+              <p class="font-semibold text-zinc-700">DATE CREATED:</p>
+              <p class="text-zinc-600 mt-1">${new Date(est.createdAt || Date.now()).toLocaleDateString()}</p>
+              <p class="text-zinc-600 mt-1">QBO Link Status: <span class="text-emerald-600">Connected</span></p>
+            </div>
+          </div>
+          
+          <div class="my-4 py-2 border-b border-t border-zinc-200">
+            <p class="text-sm font-extrabold text-zinc-950 tracking-tight">Subject: Breakdown for direct labor cost</p>
+          </div>
+
+          <div class="space-y-6 mt-6">
+            ${laborLineItems.map((laborLine, lIdx) => {
+              const subtotal = (laborLine.laborItems || []).reduce((acc: number, cur: any) => acc + (cur.amount || 0), 0);
+              return `
+                <div class="border border-zinc-200 rounded-lg p-4 bg-zinc-50/30">
+                  <div class="mb-3">
+                    <h3 class="text-xs font-extrabold text-zinc-700 uppercase tracking-wide">Category: ${laborLine.description || 'Reimbursement Labor'}</h3>
+                  </div>
+                  <table class="w-full text-[11px] text-left border-collapse">
+                    <thead>
+                      <tr class="bg-zinc-100/80 text-zinc-800 uppercase font-semibold">
+                        <th class="p-2 border-b w-10 text-center">SL#</th>
+                        <th class="p-2 border-b">Department</th>
+                        <th class="p-2 border-b">Designation</th>
+                        <th class="p-2 border-b text-center">FTE Required</th>
+                        <th class="p-2 border-b text-right font-mono">Time Cost/Hour</th>
+                        <th class="p-2 border-b text-center font-mono">Hours</th>
+                        <th class="p-2 border-b text-right font-mono">Total Price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${(laborLine.laborItems || []).map((li, liIdx) => `
+                        <tr class="border-b border-zinc-100 text-zinc-700 hover:bg-zinc-50">
+                          <td class="p-2 text-center font-mono text-zinc-400">${liIdx + 1}</td>
+                          <td class="p-2">${li.department || 'N/A'}</td>
+                          <td class="p-2 font-medium text-zinc-900">${li.designation || 'N/A'}</td>
+                          <td class="p-2 text-center">${li.ftePercentage || 'N/A'}</td>
+                          <td class="p-2 text-right font-mono">${currencySymbol} ${(li.hourlyRate || 0).toLocaleString()}</td>
+                          <td class="p-2 text-center font-mono font-semibold">${li.hours || 0}</td>
+                          <td class="p-2 text-right font-mono font-bold text-zinc-900">${currencySymbol} ${(li.amount || 0).toLocaleString()}</td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                    <tfoot>
+                      <tr class="bg-zinc-100/40 font-bold">
+                        <td colspan="6" class="p-2 text-right text-zinc-600">Subtotal Direct Labor Cost:</td>
+                        <td class="p-2 text-right text-indigo-600 font-mono">${currencySymbol} ${subtotal.toLocaleString()}</td>
+                      </tr>
+                      ${(laborLine.discountPercentage || 0) > 0 ? `
+                      <tr class="bg-zinc-50 font-bold text-rose-600">
+                        <td colspan="6" class="p-2 text-right text-zinc-600">Discount (${(laborLine.discountPercentage || 0).toFixed(2)}%):</td>
+                        <td class="p-2 text-right font-mono">- ${currencySymbol} ${(laborLine.discountAmount || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                      </tr>
+                      <tr class="bg-emerald-50 font-bold text-emerald-800">
+                        <td colspan="6" class="p-2 text-right">Net Direct Labor Cost:</td>
+                        <td class="p-2 text-right font-mono">${currencySymbol} ${(laborLine.amount || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                      </tr>
+                      ` : ''}
+                    </tfoot>
+                  </table>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+      populated += breakdownHTML;
     }
 
     setActivePreviewHTML(populated);
@@ -483,6 +746,98 @@ export default function EstimatesModule({
         `class="text-zinc-600 mt-1">${clientNameDisplay}</p>`,
         `class="text-zinc-600 mt-1">${clientNameDisplay}</p>\n      <p class="text-zinc-500 italic text-[11px]">${clientAddress}</p>`
       );
+    }
+
+    // Append Direct Labor Cost Breakdown Page to Live Preview
+    const laborLineItems = lineItems.filter(item => item.isReimbursementLabor && item.laborItems && item.laborItems.length > 0);
+    if (laborLineItems.length > 0) {
+      const breakdownHTML = `
+        <div class="p-8 font-sans border-2 border-zinc-200 rounded-lg bg-white mt-8" style="page-break-before: always; break-before: page;">
+          <div class="flex justify-between border-b pb-6">
+            <div>
+              <h1 class="text-3xl font-extrabold text-indigo-600 tracking-tight">${company.name}</h1>
+              <p class="text-xs text-zinc-500 mt-1">SaaS ERP Commercial Division</p>
+            </div>
+            <div class="text-right">
+              <h2 class="text-xl font-bold text-zinc-800">DIRECT LABOR BREAKDOWN</h2>
+              <p class="text-xs text-zinc-500">Ref: EST-DRAFT</p>
+            </div>
+          </div>
+          <div class="my-6 grid grid-cols-2 gap-4 text-xs">
+            <div>
+              <p class="font-semibold text-zinc-700">PREPARED FOR:</p>
+              <p class="text-zinc-600 mt-1 font-bold">${clientNameDisplay}</p>
+              <p class="text-zinc-500 mt-0.5 italic text-[11px]">${clientAddress}</p>
+              <p class="text-zinc-600 mt-1">Project: ${proj?.name || 'N/A'}</p>
+            </div>
+            <div class="text-right">
+              <p class="font-semibold text-zinc-700">DATE CREATED:</p>
+              <p class="text-zinc-600 mt-1">${new Date().toLocaleDateString()}</p>
+              <p class="text-zinc-600 mt-1">QBO Link Status: <span class="text-emerald-600">Connected</span></p>
+            </div>
+          </div>
+          
+          <div class="my-4 py-2 border-b border-t border-zinc-200">
+            <p class="text-sm font-extrabold text-zinc-950 tracking-tight">Subject: Breakdown for direct labor cost</p>
+          </div>
+
+          <div class="space-y-6 mt-6">
+            ${laborLineItems.map((laborLine, lIdx) => {
+              const subtotal = (laborLine.laborItems || []).reduce((acc: number, cur: any) => acc + (cur.amount || 0), 0);
+              return `
+                <div class="border border-zinc-200 rounded-lg p-4 bg-zinc-50/30">
+                  <div class="mb-3">
+                    <h3 class="text-xs font-extrabold text-zinc-700 uppercase tracking-wide">Category: ${laborLine.description || 'Reimbursement Labor'}</h3>
+                  </div>
+                  <table class="w-full text-[11px] text-left border-collapse">
+                    <thead>
+                      <tr class="bg-zinc-100/80 text-zinc-800 uppercase font-semibold">
+                        <th class="p-2 border-b w-10 text-center">SL#</th>
+                        <th class="p-2 border-b">Department</th>
+                        <th class="p-2 border-b">Designation</th>
+                        <th class="p-2 border-b text-center">FTE Required</th>
+                        <th class="p-2 border-b text-right font-mono">Time Cost/Hour</th>
+                        <th class="p-2 border-b text-center font-mono">Hours</th>
+                        <th class="p-2 border-b text-right font-mono">Total Price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${(laborLine.laborItems || []).map((li, liIdx) => `
+                        <tr class="border-b border-zinc-100 text-zinc-700 hover:bg-zinc-50">
+                          <td class="p-2 text-center font-mono text-zinc-400">${liIdx + 1}</td>
+                          <td class="p-2">${li.department || 'N/A'}</td>
+                          <td class="p-2 font-medium text-zinc-900">${li.designation || 'N/A'}</td>
+                          <td class="p-2 text-center">${li.ftePercentage || 'N/A'}</td>
+                          <td class="p-2 text-right font-mono">${currencySymbol} ${(li.hourlyRate || 0).toLocaleString()}</td>
+                          <td class="p-2 text-center font-mono font-semibold">${li.hours || 0}</td>
+                          <td class="p-2 text-right font-mono font-bold text-zinc-900">${currencySymbol} ${(li.amount || 0).toLocaleString()}</td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                    <tfoot>
+                      <tr class="bg-zinc-100/40 font-bold">
+                        <td colspan="6" class="p-2 text-right text-zinc-600">Subtotal Direct Labor Cost:</td>
+                        <td class="p-2 text-right text-indigo-600 font-mono">${currencySymbol} ${subtotal.toLocaleString()}</td>
+                      </tr>
+                      ${(laborLine.discountPercentage || 0) > 0 ? `
+                      <tr class="bg-zinc-50 font-bold text-rose-600">
+                        <td colspan="6" class="p-2 text-right text-zinc-600">Discount (${(laborLine.discountPercentage || 0).toFixed(2)}%):</td>
+                        <td class="p-2 text-right font-mono">- ${currencySymbol} ${(laborLine.discountAmount || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                      </tr>
+                      <tr class="bg-emerald-50 font-bold text-emerald-800">
+                        <td colspan="6" class="p-2 text-right">Net Direct Labor Cost:</td>
+                        <td class="p-2 text-right font-mono">${currencySymbol} ${(laborLine.amount || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                      </tr>
+                      ` : ''}
+                    </tfoot>
+                  </table>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+      populated += breakdownHTML;
     }
 
     return populated;
@@ -561,77 +916,200 @@ export default function EstimatesModule({
       </div>
 
       {activeSubTab === 'estimates' ? (
-        <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm border-collapse" style={{ tableLayout: 'fixed', minWidth: tableMinWidth }}>
-            <thead>
-              <tr className="bg-zinc-50 border-b border-zinc-100 text-zinc-600 font-semibold text-xs uppercase tracking-wider select-none">
-                <th className="p-4 relative group" style={{ width: colWidths.expand }}>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('expand', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+        <div className="space-y-4">
+          {/* Elegant Search & Filter Bar */}
+          <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-xs space-y-3">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+                <input
+                  type="text"
+                  placeholder="Search by ID, client name, project name, or scope details..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-400"
+                />
+                {searchTerm && (
+                  <button
+                    onClick={() => setSearchTerm('')}
+                    className="absolute right-3 top-2.5 hover:text-zinc-600 text-zinc-400 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-all cursor-pointer ${
+                  showFilters || activeFiltersCount > 0
+                    ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-xs'
+                    : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+                }`}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                <span>Filters</span>
+                {activeFiltersCount > 0 && (
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">
+                    {activeFiltersCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Expandable Advanced Filters */}
+            {showFilters && (
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 pt-3 border-t border-zinc-100 animate-fadeIn text-xs">
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Status</label>
+                  <select
+                    value={estimateStatus}
+                    onChange={(e) => setEstimateStatus(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    <option value="DRAFT">Draft</option>
+                    <option value="SENT">Sent</option>
+                    <option value="APPROVED">Approved (CS + Finance)</option>
+                    <option value="REJECTED">Rejected</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Min Amount ({company.currency || 'BDT'})</label>
+                  <input
+                    type="number"
+                    placeholder="Min amount..."
+                    value={minAmount}
+                    onChange={(e) => setMinAmount(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
                   />
-                </th>
-                <th className="p-4 relative group" style={{ width: colWidths.ref }}>
-                  <span className="truncate block pr-2">Estimate Ref</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('ref', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Max Amount ({company.currency || 'BDT'})</label>
+                  <input
+                    type="number"
+                    placeholder="Max amount..."
+                    value={maxAmount}
+                    onChange={(e) => setMaxAmount(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
                   />
-                </th>
-                <th className="p-4 relative group" style={{ width: colWidths.project }}>
-                  <span className="truncate block pr-2">Project</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('project', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Start Date</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-xs"
                   />
-                </th>
-                <th className="p-4 text-right relative group" style={{ width: colWidths.amount }}>
-                  <span className="truncate block pr-2">Total Amount</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('amount', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">End Date</label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-xs"
                   />
-                </th>
-                <th className="p-4 text-center relative group" style={{ width: colWidths.csApproved }}>
-                  <span className="truncate block px-2">CS Mgr Approved</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('csApproved', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
-                  />
-                </th>
-                <th className="p-4 text-center relative group" style={{ width: colWidths.financeApproved }}>
-                  <span className="truncate block px-2">Finance Approved</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('financeApproved', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
-                  />
-                </th>
-                <th className="p-4 text-center relative group" style={{ width: colWidths.status }}>
-                  <span className="truncate block px-2">Live Status</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('status', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
-                  />
-                </th>
-                <th className="p-4 text-center relative group" style={{ width: colWidths.qbo }}>
-                  <span className="truncate block px-2">QuickBooks Sync</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('qbo', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
-                  />
-                </th>
-                <th className="p-4 text-right relative group" style={{ width: colWidths.actions }}>
-                  <span className="truncate block pr-2">Actions</span>
-                  <div
-                    onMouseDown={(e) => handleMouseDown('actions', e)}
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none"
-                  />
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100 text-zinc-700">
-              {estimates.map((est) => {
+                </div>
+              </div>
+            )}
+
+            {(searchTerm || activeFiltersCount > 0) && (
+              <div className="flex justify-between items-center text-xs text-zinc-500 pt-1">
+                <span>Found <strong>{filteredEstimates.length}</strong> matching estimates</span>
+                <button
+                  onClick={() => {
+                    setSearchTerm('');
+                    setEstimateStatus('ALL');
+                    setMinAmount('');
+                    setMaxAmount('');
+                    setStartDate('');
+                    setEndDate('');
+                  }}
+                  className="text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer"
+                >
+                  Reset Filters
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm border-collapse" style={{ tableLayout: 'fixed', minWidth: tableMinWidth }}>
+              <thead>
+                <tr className="bg-zinc-50 border-b border-zinc-100 text-zinc-600 font-semibold text-xs uppercase tracking-wider select-none">
+                  <th className="p-4 relative group" style={{ width: colWidths.expand }}>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('expand', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 relative group" style={{ width: colWidths.ref }}>
+                    <span className="truncate block pr-2">Estimate Ref</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('ref', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 relative group" style={{ width: colWidths.project }}>
+                    <span className="truncate block pr-2">Project</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('project', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 text-right relative group" style={{ width: colWidths.amount }}>
+                    <span className="truncate block pr-2">Total Amount</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('amount', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 text-center relative group" style={{ width: colWidths.csApproved }}>
+                    <span className="truncate block px-2">CS Mgr Approved</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('csApproved', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 text-center relative group" style={{ width: colWidths.financeApproved }}>
+                    <span className="truncate block px-2">Finance Approved</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('financeApproved', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 text-center relative group" style={{ width: colWidths.status }}>
+                    <span className="truncate block px-2">Live Status</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('status', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 text-center relative group" style={{ width: colWidths.qbo }}>
+                    <span className="truncate block px-2">QuickBooks Sync</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('qbo', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                    />
+                  </th>
+                  <th className="p-4 text-right relative group" style={{ width: colWidths.actions }}>
+                    <span className="truncate block pr-2">Actions</span>
+                    <div
+                      onMouseDown={(e) => handleMouseDown('actions', e)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none"
+                    />
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 text-zinc-700">
+                {filteredEstimates.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="p-8 text-center text-zinc-400 italic">No commercial estimates match your filter criteria.</td>
+                  </tr>
+                ) : (
+                  filteredEstimates.map((est) => {
                 const proj = projects.find(p => p.id === est.projectId);
                 const isExpanded = expandedEstId === est.id;
                 
@@ -877,99 +1355,124 @@ export default function EstimatesModule({
                     )}
                   </React.Fragment>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>
       </div>
+    </div>
       ) : (
-        <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-xs">
-          <div className="p-5 border-b border-zinc-100 flex justify-between items-center bg-zinc-50/50">
-            <div>
-              <h3 className="text-sm font-bold text-zinc-900">Client Partner Registry</h3>
-              <p className="text-xs text-zinc-500 mt-0.5">CS team logs client onboarding requests. Finance managers verify and sign off.</p>
+        <div className="space-y-4">
+          {/* Client Search Bar */}
+          <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-xs">
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+              <input
+                type="text"
+                placeholder="Search clients by name, ID, or billing address..."
+                value={clientSearchTerm}
+                onChange={(e) => setClientSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-400"
+              />
+              {clientSearchTerm && (
+                <button
+                  onClick={() => setClientSearchTerm('')}
+                  className="absolute right-3 top-2.5 hover:text-zinc-600 text-zinc-400 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
             </div>
-            {canCreate && (
-              <button
-                onClick={() => {
-                  setNewClientName('');
-                  setNewClientAddress('');
-                  setShowNewClientModal(true);
-                }}
-                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Onboard New Client
-              </button>
-            )}
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm border-collapse">
-              <thead>
-                <tr className="bg-zinc-50 border-b border-zinc-100 text-zinc-600 font-semibold text-xs uppercase tracking-wider">
-                  <th className="p-4">Client Name</th>
-                  <th className="p-4">Billing Address</th>
-                  <th className="p-4">Created By</th>
-                  <th className="p-4 text-center">Verification Status</th>
-                  <th className="p-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100 text-zinc-700">
-                {clients.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-8 text-center text-zinc-400 italic">No client accounts registered. Click Onboard New Client to begin.</td>
+          <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-xs">
+            <div className="p-5 border-b border-zinc-100 flex justify-between items-center bg-zinc-50/50">
+              <div>
+                <h3 className="text-sm font-bold text-zinc-900">Client Partner Registry</h3>
+                <p className="text-xs text-zinc-500 mt-0.5">CS team logs client onboarding requests. Finance managers verify and sign off.</p>
+              </div>
+              {canCreate && (
+                <button
+                  onClick={() => {
+                    setNewClientName('');
+                    setNewClientAddress('');
+                    setShowNewClientModal(true);
+                  }}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Onboard New Client
+                </button>
+              )}
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm border-collapse">
+                <thead>
+                  <tr className="bg-zinc-50 border-b border-zinc-100 text-zinc-600 font-semibold text-xs uppercase tracking-wider">
+                    <th className="p-4">Client Name</th>
+                    <th className="p-4">Billing Address</th>
+                    <th className="p-4">Created By</th>
+                    <th className="p-4 text-center">Verification Status</th>
+                    <th className="p-4 text-right">Actions</th>
                   </tr>
-                ) : (
-                  clients.map((client) => {
-                    const isApproved = client.isApproved;
-                    return (
-                      <tr key={client.id} className="hover:bg-zinc-50/50 transition-colors">
-                        <td className="p-4 font-semibold text-zinc-900">
-                          <div className="flex items-center gap-2">
-                            <Building className="w-4 h-4 text-zinc-400" />
-                            {client.name}
-                          </div>
-                        </td>
-                        <td className="p-4 text-zinc-600 max-w-xs truncate" title={client.address}>
-                          {client.address}
-                        </td>
-                        <td className="p-4 text-xs font-mono text-zinc-500">
-                          {client.createdBy || 'System Preset'}
-                        </td>
-                        <td className="p-4 text-center">
-                          {isApproved ? (
-                            <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-0.5 rounded-full font-medium">
-                              <Check className="w-3.5 h-3.5" /> Approved by {client.approvedBy || 'Finance Director'}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-0.5 rounded-full font-medium animate-pulse">
-                              <Clock className="w-3.5 h-3.5" /> Pending Finance Approval
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-4 text-right">
-                          {!isApproved && (currentUser.role === UserRole.FINANCE_USER || currentUser.role === UserRole.FINANCE_MANAGER || currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.MASTER_ADMIN) ? (
-                            <button
-                              onClick={() => onApproveClient(client.id)}
-                              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold cursor-pointer transition-colors shadow-sm"
-                            >
-                              Approve & Activate
-                            </button>
-                          ) : !isApproved ? (
-                            <span className="text-xs text-zinc-400 italic">Awaiting Finance Sign-off</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-semibold bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded">
-                              <Check className="w-3 h-3 text-emerald-500" /> Active
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-zinc-100 text-zinc-700">
+                  {filteredClients.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-8 text-center text-zinc-400 italic">No client accounts match your search.</td>
+                    </tr>
+                  ) : (
+                    filteredClients.map((client) => {
+                      const isApproved = client.isApproved;
+                      return (
+                        <tr key={client.id} className="hover:bg-zinc-50/50 transition-colors">
+                          <td className="p-4 font-semibold text-zinc-900">
+                            <div className="flex items-center gap-2">
+                              <Building className="w-4 h-4 text-zinc-400" />
+                              {client.name}
+                            </div>
+                          </td>
+                          <td className="p-4 text-zinc-600 max-w-xs truncate" title={client.address}>
+                            {client.address}
+                          </td>
+                          <td className="p-4 text-xs font-mono text-zinc-500">
+                            {client.createdBy || 'System Preset'}
+                          </td>
+                          <td className="p-4 text-center">
+                            {isApproved ? (
+                              <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-0.5 rounded-full font-medium">
+                                <Check className="w-3.5 h-3.5" /> Approved by {client.approvedBy || 'Finance Director'}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-100 px-2.5 py-0.5 rounded-full font-medium animate-pulse">
+                                <Clock className="w-3.5 h-3.5" /> Pending Finance Approval
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4 text-right">
+                            {!isApproved && (currentUser.role === UserRole.FINANCE_USER || currentUser.role === UserRole.FINANCE_MANAGER || currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.MASTER_ADMIN) ? (
+                              <button
+                                onClick={() => onApproveClient(client.id)}
+                                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold cursor-pointer transition-colors shadow-sm"
+                              >
+                                Approve & Activate
+                              </button>
+                            ) : !isApproved ? (
+                              <span className="text-xs text-zinc-400 italic">Awaiting Finance Sign-off</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-semibold bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded">
+                                <Check className="w-3 h-3 text-emerald-500" /> Active
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -1041,30 +1544,46 @@ export default function EstimatesModule({
           </div>
         </div>
       )}
-
-      {/* New Estimate Draft Side-by-Side Editor Modal */}
+            {/* New Estimate Draft Side-by-Side Editor Modal */}
       {showNewModal && (
-        <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl max-w-7xl w-full h-[90vh] flex flex-col overflow-hidden animate-scale-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-7xl w-full h-[90vh] flex flex-col overflow-hidden animate-scale-in text-slate-850">
             {/* Header */}
-            <div className="px-6 py-4 bg-zinc-950 border-b border-zinc-800 flex justify-between items-center shrink-0">
+            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center shrink-0">
               <div>
-                <h3 className="font-semibold text-lg text-white">
+                <h3 className="font-bold text-lg text-slate-950">
                   {editingEst ? 'Edit Commercial Proposal' : 'Commercial Proposal Workbench'}
                 </h3>
-                <p className="text-xs text-zinc-400 mt-0.5">
+                <p className="text-xs text-slate-500 mt-0.5">
                   {editingEst ? `Editing Proposal Ref: ${editingEst.id}` : 'Draft client scopes, rates, and inspect live preview'}
                 </p>
               </div>
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
+                {/* Toggle Sidebar Option */}
+                {onToggleSidebar && (
+                  <button
+                    type="button"
+                    onClick={onToggleSidebar}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                      isSidebarHidden
+                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                        : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                    }`}
+                    title="Toggle application sidebar navigation to expand screen size"
+                  >
+                    <Menu className="w-3.5 h-3.5" />
+                    {isSidebarHidden ? 'Show Sidebar' : 'Hide Sidebar'}
+                  </button>
+                )}
+
                 {/* Live Preview Toggle Button */}
                 <button
                   type="button"
                   onClick={() => setShowPreviewInModal(!showPreviewInModal)}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
                     showPreviewInModal
-                      ? 'bg-indigo-950/40 text-indigo-400 border-indigo-900/60 hover:bg-indigo-900/30'
-                      : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'
+                      ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                      : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
                   }`}
                 >
                   <Eye className="w-3.5 h-3.5" />
@@ -1078,7 +1597,7 @@ export default function EstimatesModule({
                     setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0 }]);
                     setSelectedClientName('');
                   }} 
-                  className="text-zinc-400 hover:text-white cursor-pointer p-1.5 hover:bg-zinc-800 rounded-lg transition-colors"
+                  className="text-slate-400 hover:text-slate-700 cursor-pointer p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
                 >
                   ✕
                 </button>
@@ -1090,28 +1609,28 @@ export default function EstimatesModule({
               {/* Left Column: Input Form (Scrollable) */}
               <form 
                 onSubmit={handleCreate} 
-                className={`flex-1 ${showPreviewInModal ? 'lg:max-w-[48%]' : 'lg:max-w-full w-full'} border-r border-zinc-800 flex flex-col overflow-hidden bg-zinc-900 transition-all duration-300`}
+                className={`flex-1 ${showPreviewInModal ? 'lg:max-w-[48%]' : 'lg:max-w-full w-full'} border-r border-slate-200 flex flex-col overflow-hidden bg-white transition-all duration-300`}
               >
                 <div className="flex-1 p-6 space-y-5 overflow-y-auto">
                   {editingEst && (
-                    <div className="bg-amber-500/10 border border-amber-500/30 text-amber-400 p-3.5 rounded-xl text-xs flex items-start gap-2.5">
-                      <ShieldAlert className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
+                    <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-xl text-xs flex items-start gap-2.5">
+                      <ShieldAlert className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
                       <div>
-                        <strong className="block font-semibold mb-0.5">Dual-Approval Required</strong>
-                        Saving these edits will reset this estimate back to Draft and require both <strong className="text-white font-semibold">CS Manager</strong> and <strong className="text-white font-semibold">Finance Manager</strong> approval to go live.
+                        <strong className="block font-bold mb-0.5">Dual-Approval Required</strong>
+                        Saving these edits will reset this estimate back to Draft and require both <strong className="text-slate-900 font-bold">CS Manager</strong> and <strong className="text-slate-900 font-bold">Finance Manager</strong> approval to go live.
                       </div>
                     </div>
                   )}
                   {/* Client Select & Address block */}
                   <div className="grid grid-cols-1 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-zinc-300 uppercase tracking-wider mb-1.5">Client Partner</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Client Partner</label>
                       <select
                         value={selectedClientName}
                         onChange={(e) => {
                           setSelectedClientName(e.target.value);
                         }}
-                        className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded-lg text-sm text-white focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                         required
                       >
                         <option value="">-- Select Client --</option>
@@ -1119,20 +1638,20 @@ export default function EstimatesModule({
                           <option key={c.id} value={c.name}>{c.name}</option>
                         ))}
                       </select>
-                      <p className="text-[10px] text-zinc-400 mt-1">
+                      <p className="text-[10px] text-slate-400 mt-1">
                         Only clients approved by Finance are available for selection. Create and submit a new client in the Client Registry tab first if needed.
                       </p>
                     </div>
                   </div>
 
                   {/* Auto-populated Client Address Banner */}
-                  <div className="bg-indigo-950/30 border border-indigo-900/50 p-4 rounded-xl flex items-start gap-3">
-                    <div className="mt-0.5 p-1.5 bg-indigo-500/10 text-indigo-400 rounded-lg shrink-0">
+                  <div className="bg-indigo-50/70 border border-indigo-100 p-4 rounded-xl flex items-start gap-3">
+                    <div className="mt-0.5 p-1.5 bg-indigo-100 text-indigo-600 rounded-lg shrink-0">
                       <Building className="w-4 h-4" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Client Billing Address</span>
-                      <p className="text-xs text-zinc-300 font-medium mt-0.5">
+                      <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Client Billing Address</span>
+                      <p className="text-xs text-slate-700 font-medium mt-0.5">
                         {clients.find(c => c.name.toLowerCase() === selectedClientName.toLowerCase())?.address || 'Select a client to view their address.'}
                       </p>
                     </div>
@@ -1141,198 +1660,507 @@ export default function EstimatesModule({
                   {/* Line Items Editor */}
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className="block text-xs font-semibold text-zinc-300 uppercase tracking-wider">Estimate Line Items</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Estimate Line Items</label>
                     </div>
 
-                    <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
-                      {lineItems.map((item, idx) => {
-                        const vatRate = item.vatRate !== undefined ? item.vatRate : 15;
-                        const vatAmount = item.vatAmount !== undefined ? item.vatAmount : (item.amount * (vatRate / 100));
-                        const grandTotal = item.grandTotal !== undefined ? item.grandTotal : (item.amount + vatAmount);
-                        return (
-                          <div key={idx} className={`border p-3.5 rounded-xl space-y-3 transition-all duration-300 ${
-                            item.isAgencyFee 
-                              ? 'border-indigo-500/50 bg-indigo-950/5' 
-                              : 'border-zinc-800 bg-zinc-950/40'
-                          }`}>
-                            {/* Header / Type selector */}
-                            <div className="flex justify-between items-center pb-2 border-b border-zinc-800/60">
-                              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Line Item #{idx + 1}</span>
-                              
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleLineChange(idx, 'isAgencyFee', false)}
-                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                                    !item.isAgencyFee 
-                                      ? 'bg-zinc-800 text-white border border-zinc-700' 
-                                      : 'bg-transparent text-zinc-500 hover:text-zinc-300'
-                                  }`}
-                                >
-                                  Standard
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleLineChange(idx, 'isAgencyFee', true)}
-                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                                    item.isAgencyFee 
-                                      ? 'bg-indigo-600 text-white border border-indigo-500' 
-                                      : 'bg-transparent text-zinc-500 hover:text-indigo-400'
-                                  }`}
-                                >
-                                  Agency Fee
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Scope Description and Remove Button */}
-                            <div className="flex gap-2.5 items-end">
-                              <div className="flex-1 min-w-0">
-                                <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
-                                  Scope Description {item.isAgencyFee && <span className="text-indigo-400 font-semibold">(Auto-Generated)</span>}
-                                </label>
-                                <input
-                                  type="text"
-                                  required
-                                  placeholder={item.isAgencyFee ? "Agency fee details..." : "Scope details (e.g. Concrete slab foundations)..."}
-                                  value={item.description}
-                                  onChange={(e) => handleLineChange(idx, 'description', e.target.value)}
-                                  className="w-full p-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-white focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveLine(idx)}
-                                className="p-2 text-zinc-500 hover:text-rose-400 rounded-lg hover:bg-zinc-800/50 transition-all shrink-0 cursor-pointer"
-                                title="Remove line"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-
-                            {/* Agency Fee Selection Block */}
-                            {item.isAgencyFee && (
-                              <div className="bg-zinc-950/80 p-2.5 rounded-xl border border-zinc-800 space-y-2">
-                                <div className="flex items-center justify-between">
-                                  <span className="block text-[9px] font-bold text-indigo-400 uppercase tracking-wider">
-                                    Calculate from preceding lines
-                                  </span>
-                                  <span className="text-[10px] text-zinc-400">
-                                    Total Selected Scopes: {company.currency || 'BDT'} {
-                                      ((item.selectedLineIndices || [])
-                                        .filter((selectedIdx: number) => selectedIdx < idx && lineItems[selectedIdx])
-                                        .reduce((acc: number, selectedIdx: number) => acc + (lineItems[selectedIdx].amount || 0), 0)
-                                      ).toLocaleString()
-                                    }
-                                  </span>
-                                </div>
-                                
-                                {idx === 0 ? (
-                                  <div className="text-[10px] text-amber-400 italic bg-amber-500/5 border border-amber-500/10 p-2 rounded-lg">
-                                    Agency Fee requires at least one preceding scope line to calculate from. Please add standard lines above this one.
-                                  </div>
-                                ) : (
-                                  <div className="space-y-1.5 max-h-[120px] overflow-y-auto pr-1">
-                                    {lineItems.slice(0, idx).map((preced, pIdx) => {
-                                      const isSelected = (item.selectedLineIndices || []).includes(pIdx);
-                                      return (
-                                        <label 
-                                          key={pIdx} 
-                                          className={`flex items-center gap-2.5 text-xs p-1.5 rounded-lg border transition-all cursor-pointer ${
-                                            isSelected 
-                                              ? 'bg-indigo-950/20 border-indigo-900/40 text-white' 
-                                              : 'bg-zinc-950 border-zinc-900 text-zinc-400 hover:text-zinc-300'
-                                          }`}
+                    <div className="max-h-[380px] overflow-y-auto pr-1">
+                      <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs border-collapse min-w-[950px]">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                                <th className="p-3 w-32">Type</th>
+                                <th className="p-3">Scope Description</th>
+                                <th className="p-3 w-20 text-center">Qty</th>
+                                <th className="p-3 w-32 text-right">Rate ({company.currency || 'BDT'})</th>
+                                <th className="p-3 w-20 text-center">VAT %</th>
+                                <th className="p-3 w-28 text-right">VAT Amt</th>
+                                <th className="p-3 w-32 text-right">Grand Total</th>
+                                <th className="p-3 w-12 text-center"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {lineItems.map((item, idx) => {
+                                const vatRate = item.vatRate !== undefined ? item.vatRate : 15;
+                                const vatAmount = item.vatAmount !== undefined ? item.vatAmount : (item.amount * (vatRate / 100));
+                                const grandTotal = item.grandTotal !== undefined ? item.grandTotal : (item.amount + vatAmount);
+                                return (
+                                  <React.Fragment key={idx}>
+                                    <tr className={`group transition-colors ${
+                                      item.isReimbursementLabor 
+                                        ? 'bg-emerald-50/10 hover:bg-emerald-50/20' 
+                                        : item.isAgencyFee 
+                                          ? 'bg-indigo-50/20 hover:bg-indigo-50/30' 
+                                          : 'bg-white hover:bg-slate-50/60'
+                                    }`}>
+                                      {/* Type Selector (Standard / Agency Fee / Reimbursement Labor) */}
+                                      <td className="p-3">
+                                        <select
+                                          value={
+                                            item.isReimbursementLabor 
+                                              ? 'REIMBURSEMENT_LABOR' 
+                                              : item.isAgencyFee 
+                                                ? 'AGENCY' 
+                                                : 'STANDARD'
+                                          }
+                                          onChange={(e) => handleLineChange(idx, 'lineType', e.target.value)}
+                                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-700 focus:bg-white focus:ring-1 focus:ring-indigo-500"
                                         >
-                                          <input
-                                            type="checkbox"
-                                            checked={isSelected}
-                                            onChange={() => togglePrecedingLineSelection(idx, pIdx)}
-                                            className="rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
-                                          />
-                                          <span className="truncate flex-1 font-medium">
-                                            Line #{pIdx + 1}: {preced.description || '(Empty details)'}
-                                          </span>
-                                          <span className="font-semibold shrink-0 text-zinc-300">
-                                            {company.currency || 'BDT'} {(preced.amount || 0).toLocaleString()}
-                                          </span>
-                                        </label>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                          <option value="STANDARD">Standard</option>
+                                          <option value="AGENCY">Agency Fee</option>
+                                          <option value="REIMBURSEMENT_LABOR">Reimbursement Labor</option>
+                                        </select>
+                                      </td>
 
-                            {/* Line Item Inputs and totals */}
-                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-0.5">
-                              <div>
-                                <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
-                                  {item.isAgencyFee ? 'Qty (Fixed)' : 'Qty'}
-                                </label>
-                                <input
-                                  type="number"
-                                  required
-                                  disabled={item.isAgencyFee}
-                                  min={1}
-                                  value={item.qty}
-                                  onChange={(e) => handleLineChange(idx, 'qty', Number(e.target.value))}
-                                  className="w-full p-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-center text-white focus:outline-hidden focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                                />
-                              </div>
-                              
-                              <div>
-                                <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
-                                  {item.isAgencyFee ? 'Fee Rate %' : `Rate (${company.currency || 'BDT'})`}
-                                </label>
-                                <input
-                                  type="number"
-                                  required
-                                  min={0}
-                                  value={item.isAgencyFee ? (item.agencyFeeRate ?? 10) : item.rate}
-                                  onChange={(e) => handleLineChange(idx, item.isAgencyFee ? 'agencyFeeRate' : 'rate', Number(e.target.value))}
-                                  className="w-full p-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-right text-white focus:outline-hidden focus:border-indigo-500 font-semibold"
-                                />
-                              </div>
+                                      {/* Description Input */}
+                                      <td className="p-3">
+                                        <input
+                                          type="text"
+                                          required
+                                          placeholder={
+                                            item.isReimbursementLabor
+                                              ? "Direct labor category name..."
+                                              : item.isAgencyFee 
+                                                ? "Agency fee description..." 
+                                                : "e.g. Concrete slab foundations..."
+                                          }
+                                          value={item.description}
+                                          onChange={(e) => handleLineChange(idx, 'description', e.target.value)}
+                                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:ring-1 focus:ring-indigo-500 font-medium"
+                                        />
+                                      </td>
 
-                              <div>
-                                <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">VAT Rate %</label>
-                                <input
-                                  type="number"
-                                  required
-                                  min={0}
-                                  max={100}
-                                  value={vatRate}
-                                  onChange={(e) => handleLineChange(idx, 'vatRate', Number(e.target.value))}
-                                  className="w-full p-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-center text-white focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
+                                      {/* Qty Input */}
+                                      <td className="p-3">
+                                        <input
+                                          type="number"
+                                          required
+                                          disabled={item.isAgencyFee || item.isReimbursementLabor}
+                                          min={1}
+                                          value={item.qty}
+                                          onChange={(e) => handleLineChange(idx, 'qty', Number(e.target.value))}
+                                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-center text-slate-900 focus:bg-white focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                                        />
+                                      </td>
 
-                              <div className="bg-zinc-950/80 border border-zinc-800/60 p-2 rounded-lg text-right flex flex-col justify-center">
-                                <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">VAT Amt</span>
-                                <span className="text-[11px] font-semibold text-zinc-400 block mt-0.5">
-                                  {company.currency || 'BDT'} {vatAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                                </span>
-                              </div>
+                                      {/* Rate Input */}
+                                      <td className="p-3">
+                                        <input
+                                          type="number"
+                                          required
+                                          min={0}
+                                          disabled={item.isReimbursementLabor}
+                                          value={item.isAgencyFee ? (item.agencyFeeRate ?? 10) : item.rate}
+                                          onChange={(e) => handleLineChange(idx, item.isAgencyFee ? 'agencyFeeRate' : 'rate', Number(e.target.value))}
+                                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-right text-slate-900 font-semibold focus:bg-white focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        />
+                                      </td>
 
-                              <div className="bg-indigo-950/20 border border-indigo-900/40 p-2 rounded-lg text-right col-span-2 sm:col-span-1 flex flex-col justify-center">
-                                <span className="block text-[8px] font-bold text-indigo-400 uppercase tracking-wider">
-                                  {item.isAgencyFee ? 'Fee Total' : 'Grand Total'}
-                                </span>
-                                <span className="text-[11px] font-bold text-white block mt-0.5">
-                                  {company.currency || 'BDT'} {grandTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                                      {/* VAT Rate Input */}
+                                      <td className="p-3">
+                                        <input
+                                          type="number"
+                                          required
+                                          min={0}
+                                          max={100}
+                                          value={vatRate}
+                                          onChange={(e) => handleLineChange(idx, 'vatRate', Number(e.target.value))}
+                                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-center text-slate-900 focus:bg-white focus:ring-1 focus:ring-indigo-500"
+                                        />
+                                      </td>
+
+                                      {/* VAT Amt */}
+                                      <td className="p-3 text-right font-mono font-medium text-slate-500 text-xs">
+                                        {vatAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                      </td>
+
+                                      {/* Grand Total */}
+                                      <td className="p-3 text-right font-bold text-slate-900 text-xs">
+                                        {grandTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                      </td>
+
+                                      {/* Trash Action */}
+                                      <td className="p-3 text-center">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveLine(idx)}
+                                          className="p-1 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-all cursor-pointer"
+                                          title="Remove line"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </td>
+                                    </tr>
+
+                                    {/* Agency Fee Configuration Sub-row */}
+                                    {item.isAgencyFee && (
+                                      <tr className="bg-indigo-50/10">
+                                        <td colSpan={8} className="p-3 border-b border-indigo-100">
+                                          <div className="bg-white/80 border border-indigo-100/60 p-3 rounded-lg space-y-2 text-xs">
+                                            <div className="flex items-center justify-between">
+                                              <span className="block text-[10px] font-bold text-indigo-500 uppercase tracking-wider">
+                                                Select preceding lines to include in the agency fee calculation:
+                                              </span>
+                                              <span className="text-[10px] font-bold text-slate-500">
+                                                Subtotal sum: {company.currency || 'BDT'} {
+                                                  ((item.selectedLineIndices || [])
+                                                    .filter((selectedIdx: number) => selectedIdx < idx && lineItems[selectedIdx])
+                                                    .reduce((acc: number, selectedIdx: number) => acc + (lineItems[selectedIdx].amount || 0), 0)
+                                                  ).toLocaleString()
+                                                }
+                                              </span>
+                                            </div>
+                                            
+                                            {idx === 0 ? (
+                                              <div className="text-[10px] text-amber-600 italic">
+                                                Add standard lines above this agency fee item to select them.
+                                              </div>
+                                            ) : (
+                                              <div className="flex flex-wrap gap-2 pt-1 max-h-[120px] overflow-y-auto">
+                                                {lineItems.slice(0, idx).map((preced, pIdx) => {
+                                                  const isSelected = (item.selectedLineIndices || []).includes(pIdx);
+                                                  return (
+                                                    <label 
+                                                      key={pIdx} 
+                                                      className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
+                                                        isSelected 
+                                                          ? 'bg-indigo-100 border-indigo-200 text-indigo-800 font-semibold' 
+                                                          : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-750'
+                                                      }`}
+                                                    >
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={isSelected}
+                                                        onChange={() => togglePrecedingLineSelection(idx, pIdx)}
+                                                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-3 h-3 cursor-pointer"
+                                                      />
+                                                      <span className="truncate max-w-[150px]">
+                                                        #{pIdx + 1}: {preced.description || '(Empty description)'}
+                                                      </span>
+                                                      <span className="font-mono text-[10px] opacity-75">
+                                                        ({(preced.amount || 0).toLocaleString()})
+                                                      </span>
+                                                    </label>
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+
+                                    {/* Reimbursement Direct Labor Cost Sub-row Editor */}
+                                    {item.isReimbursementLabor && (
+                                      <tr className="bg-emerald-50/5">
+                                        <td colSpan={8} className="p-3 border-b border-emerald-100">
+                                          <div className="bg-white border border-emerald-150 rounded-xl p-4 space-y-4 shadow-xs">
+                                            <div className="flex items-center justify-between">
+                                              <div>
+                                                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                                                  <Clock className="w-4 h-4 text-emerald-500" />
+                                                  Direct Labor Details - Resource Breakdown Table
+                                                </h4>
+                                                <p className="text-[10px] text-slate-500 mt-0.5">
+                                                  Select Designation to populate hourly rate card. Change values to recalculate total price.
+                                                </p>
+                                              </div>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  const updated = [...lineItems];
+                                                  const currentLabor = updated[idx].laborItems || [];
+                                                  const newLaborItem = {
+                                                    id: `labor-item-${Date.now()}-${currentLabor.length}`,
+                                                    department: 'Planning Department',
+                                                    designation: '',
+                                                    ftePercentage: '10%',
+                                                    hourlyRate: 0,
+                                                    hours: 0,
+                                                    amount: 0
+                                                  };
+                                                  updated[idx] = {
+                                                    ...updated[idx],
+                                                    laborItems: [...currentLabor, newLaborItem]
+                                                  };
+                                                  setLineItems(recalculateLineItems(updated));
+                                                }}
+                                                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-semibold cursor-pointer transition-all"
+                                              >
+                                                <Plus className="w-3.5 h-3.5" />
+                                                Add Designation Line
+                                              </button>
+                                            </div>
+
+                                            <div className="overflow-x-auto border border-slate-100 rounded-lg">
+                                              <table className="w-full text-left text-xs border-collapse">
+                                                <thead>
+                                                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[9px]">
+                                                    <th className="p-2 w-10 text-center">SL#</th>
+                                                    <th className="p-2 w-1/4">Department</th>
+                                                    <th className="p-2 w-1/4">Direct Labor Details (Designation)</th>
+                                                    <th className="p-2 w-24 text-center">FTE Required</th>
+                                                    <th className="p-2 w-32 text-right">Time Cost/Hour ({company.currency || 'BDT'})</th>
+                                                    <th className="p-2 w-24 text-center">Hours</th>
+                                                    <th className="p-2 w-32 text-right">Total price ({company.currency || 'BDT'})</th>
+                                                    <th className="p-2 w-10 text-center"></th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100 font-medium">
+                                                  {(item.laborItems || []).map((labor, lIdx) => (
+                                                    <tr key={labor.id || lIdx} className="hover:bg-slate-50/40">
+                                                      {/* SL# */}
+                                                      <td className="p-2 text-center text-slate-400 font-mono text-[10px]">
+                                                        {lIdx + 1}
+                                                      </td>
+
+                                                      {/* Department */}
+                                                      <td className="p-2">
+                                                        <input
+                                                          type="text"
+                                                          placeholder="e.g. Account Management"
+                                                          value={labor.department}
+                                                          onChange={(e) => {
+                                                            const updated = [...lineItems];
+                                                            const currentLabor = [...(updated[idx].laborItems || [])];
+                                                            currentLabor[lIdx] = {
+                                                              ...currentLabor[lIdx],
+                                                              department: e.target.value
+                                                            };
+                                                            updated[idx] = { ...updated[idx], laborItems: currentLabor };
+                                                            setLineItems(recalculateLineItems(updated));
+                                                          }}
+                                                          className="w-full p-1 border border-slate-200 rounded text-xs text-slate-800 bg-slate-50 focus:bg-white"
+                                                        />
+                                                      </td>
+
+                                                      {/* Designation Select / Input */}
+                                                      <td className="p-2">
+                                                        <select
+                                                          value={labor.designation}
+                                                          onChange={(e) => {
+                                                            const selectedDesig = e.target.value;
+                                                            const matchedRate = laborRates.find(r => r.designation === selectedDesig);
+                                                            
+                                                            const updated = [...lineItems];
+                                                            const currentLabor = [...(updated[idx].laborItems || [])];
+                                                            
+                                                            currentLabor[lIdx] = {
+                                                              ...currentLabor[lIdx],
+                                                              designation: selectedDesig,
+                                                              department: matchedRate ? matchedRate.department : currentLabor[lIdx].department,
+                                                              hourlyRate: matchedRate ? matchedRate.hourlyRate : currentLabor[lIdx].hourlyRate,
+                                                              amount: (matchedRate ? matchedRate.hourlyRate : currentLabor[lIdx].hourlyRate) * currentLabor[lIdx].hours
+                                                            };
+                                                            updated[idx] = { ...updated[idx], laborItems: currentLabor };
+                                                            setLineItems(recalculateLineItems(updated));
+                                                          }}
+                                                          className="w-full p-1 border border-slate-200 rounded text-xs text-slate-850 font-semibold bg-white"
+                                                        >
+                                                          <option value="">-- Select Designation --</option>
+                                                          {laborRates.map((r, ri) => (
+                                                            <option key={ri} value={r.designation}>
+                                                              {r.designation} ({company.currency || 'BDT'} {r.hourlyRate}/hr)
+                                                            </option>
+                                                          ))}
+                                                        </select>
+                                                      </td>
+
+                                                      {/* FTE Percentage */}
+                                                      <td className="p-2">
+                                                        <input
+                                                          type="text"
+                                                          placeholder="e.g. 50%"
+                                                          value={labor.ftePercentage || ''}
+                                                          onChange={(e) => {
+                                                            const updated = [...lineItems];
+                                                            const currentLabor = [...(updated[idx].laborItems || [])];
+                                                            currentLabor[lIdx] = {
+                                                              ...currentLabor[lIdx],
+                                                              ftePercentage: e.target.value
+                                                            };
+                                                            updated[idx] = { ...updated[idx], laborItems: currentLabor };
+                                                            setLineItems(recalculateLineItems(updated));
+                                                          }}
+                                                          className="w-full p-1 border border-slate-200 rounded text-xs text-center"
+                                                        />
+                                                      </td>
+
+                                                      {/* Hourly Rate */}
+                                                      <td className="p-2">
+                                                        <input
+                                                          type="number"
+                                                          min={0}
+                                                          value={labor.hourlyRate}
+                                                          onChange={(e) => {
+                                                            const rateVal = Number(e.target.value);
+                                                            const updated = [...lineItems];
+                                                            const currentLabor = [...(updated[idx].laborItems || [])];
+                                                            currentLabor[lIdx] = {
+                                                              ...currentLabor[lIdx],
+                                                              hourlyRate: rateVal,
+                                                              amount: rateVal * currentLabor[lIdx].hours
+                                                            };
+                                                            updated[idx] = { ...updated[idx], laborItems: currentLabor };
+                                                            setLineItems(recalculateLineItems(updated));
+                                                          }}
+                                                          className="w-full p-1 border border-slate-200 rounded text-xs text-right font-mono font-bold text-slate-800 focus:bg-white"
+                                                        />
+                                                      </td>
+
+                                                      {/* Hours */}
+                                                      <td className="p-2">
+                                                        <input
+                                                          type="number"
+                                                          min={0}
+                                                          disabled
+                                                          value={labor.hours}
+                                                          className="w-full p-1 border border-slate-200 rounded text-xs text-center font-bold text-slate-500 bg-slate-50 cursor-not-allowed"
+                                                          title="Calculated automatically using standard formula =ROUNDUP(20.417*8*<FTE %>)"
+                                                        />
+                                                      </td>
+
+                                                      {/* Total Price (BDT) */}
+                                                      <td className="p-2 text-right font-bold text-slate-900 font-mono">
+                                                        {Number(labor.amount).toLocaleString()}
+                                                      </td>
+
+                                                      {/* Action - Delete row */}
+                                                      <td className="p-2 text-center">
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => {
+                                                            const updated = [...lineItems];
+                                                            const currentLabor = (updated[idx].laborItems || []).filter((_, li) => li !== lIdx);
+                                                            updated[idx] = { ...updated[idx], laborItems: currentLabor };
+                                                            setLineItems(recalculateLineItems(updated));
+                                                          }}
+                                                          className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 transition-all cursor-pointer"
+                                                        >
+                                                          ✕
+                                                        </button>
+                                                      </td>
+                                                    </tr>
+                                                  ))}
+                                                </tbody>
+                                                <tfoot>
+                                                  <tr className="bg-slate-50/50 font-bold border-t border-slate-200">
+                                                    <td colSpan={6} className="p-2.5 text-right text-slate-600 text-xs">Total Direct Labor Subtotal Cost:</td>
+                                                    <td className="p-2.5 text-right text-slate-900 font-mono text-xs">
+                                                      {company.currency || 'BDT'} {(item.laborItems || []).reduce((acc: number, cur: any) => acc + (cur.amount || 0), 0).toLocaleString()}
+                                                    </td>
+                                                    <td></td>
+                                                  </tr>
+                                                  <tr className="bg-slate-50/30 border-t border-slate-100 font-semibold text-slate-600">
+                                                    <td colSpan={6} className="p-2 text-right text-xs">
+                                                      <div className="inline-flex items-center gap-2 justify-end w-full">
+                                                        {item.discountInputMode === 'amount' ? (
+                                                          <span className="inline-flex items-center gap-1.5">
+                                                            Discount Amount:
+                                                            <span className="text-slate-400 font-mono text-[11px]">{company.currency || 'BDT'}</span>
+                                                            <input
+                                                              type="number"
+                                                              min={0}
+                                                              step="any"
+                                                              placeholder="0.00"
+                                                              value={item.discountAmount !== undefined && item.discountAmount !== 0 ? item.discountAmount : ''}
+                                                              onChange={(e) => {
+                                                                const val = e.target.value === '' ? 0 : Number(e.target.value);
+                                                                const updated = [...lineItems];
+                                                                updated[idx] = { 
+                                                                  ...updated[idx], 
+                                                                  discountAmount: val,
+                                                                  discountInputMode: 'amount'
+                                                                };
+                                                                setLineItems(recalculateLineItems(updated));
+                                                              }}
+                                                              className="w-24 p-1 border border-slate-200 bg-white rounded text-xs text-right text-slate-800 font-bold focus:ring-1 focus:ring-indigo-500 focus:outline-hidden font-mono"
+                                                            />
+                                                          </span>
+                                                        ) : (
+                                                          <span className="inline-flex items-center gap-1.5">
+                                                            Discount Percentage:
+                                                            <input
+                                                              type="number"
+                                                              min={0}
+                                                              max={100}
+                                                              step="any"
+                                                              placeholder="0"
+                                                              value={item.discountPercentage !== undefined && item.discountPercentage !== 0 ? item.discountPercentage : ''}
+                                                              onChange={(e) => {
+                                                                const val = e.target.value === '' ? 0 : Number(e.target.value);
+                                                                const updated = [...lineItems];
+                                                                updated[idx] = { 
+                                                                  ...updated[idx], 
+                                                                  discountPercentage: val,
+                                                                  discountInputMode: 'percentage'
+                                                                };
+                                                                setLineItems(recalculateLineItems(updated));
+                                                              }}
+                                                              className="w-16 p-1 border border-slate-200 bg-white rounded text-xs text-center text-slate-800 font-bold focus:ring-1 focus:ring-indigo-500 focus:outline-hidden"
+                                                            />
+                                                            %
+                                                          </span>
+                                                        )}
+                                                        
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => {
+                                                            const updated = [...lineItems];
+                                                            const newMode = item.discountInputMode === 'amount' ? 'percentage' : 'amount';
+                                                            updated[idx] = {
+                                                              ...updated[idx],
+                                                              discountInputMode: newMode
+                                                            };
+                                                            setLineItems(recalculateLineItems(updated));
+                                                          }}
+                                                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-[10px] font-bold tracking-wider uppercase transition-all border border-indigo-200 cursor-pointer"
+                                                          title="Switch discount input mode (Percentage vs Fixed Amount)"
+                                                        >
+                                                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                                                          </svg>
+                                                          {item.discountInputMode === 'amount' ? '% Rate' : 'Fixed'}
+                                                        </button>
+                                                      </div>
+                                                    </td>
+                                                    <td className="p-2 text-right font-mono text-xs text-rose-600">
+                                                      {item.discountInputMode === 'amount' ? (
+                                                        <span className="text-[10px] text-slate-400 font-semibold mr-2">
+                                                          ({(item.discountPercentage || 0).toFixed(2)}%)
+                                                        </span>
+                                                      ) : null}
+                                                      - {company.currency || 'BDT'} {(item.discountAmount || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                                    </td>
+                                                    <td></td>
+                                                  </tr>
+                                                  <tr className="bg-emerald-50/20 font-bold border-t border-emerald-100 text-emerald-800">
+                                                    <td colSpan={6} className="p-2.5 text-right text-xs">Net Direct Labor Cost (Applied to Line Item):</td>
+                                                    <td className="p-2.5 text-right text-emerald-600 font-mono text-xs">
+                                                      {company.currency || 'BDT'} {(item.amount || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                                    </td>
+                                                    <td></td>
+                                                  </tr>
+                                                </tfoot>
+                                              </table>
+                                            </div>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </React.Fragment>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
 
                       {/* Add Scope Line Button Below Line Items */}
                       <button
                         type="button"
                         onClick={handleAddLine}
-                        className="w-full py-2.5 border border-dashed border-zinc-800 hover:border-indigo-500 hover:bg-indigo-950/20 text-xs font-semibold text-zinc-400 hover:text-indigo-400 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer mt-2"
+                        className="w-full py-2.5 border border-dashed border-slate-300 hover:border-indigo-500 hover:bg-indigo-50/50 text-xs font-semibold text-slate-500 hover:text-indigo-600 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer mt-3"
                       >
                         <Plus className="w-4 h-4" /> Add Scope Line
                       </button>
@@ -1341,18 +2169,18 @@ export default function EstimatesModule({
                 </div>
 
                 {/* Footer Controls of Left Column */}
-                <div className="p-5 border-t border-zinc-800 bg-zinc-950 flex flex-col gap-2 shrink-0">
+                <div className="p-5 border-t border-slate-200 bg-slate-50 flex flex-col gap-2 shrink-0">
                   <div className="flex justify-between items-center text-xs">
-                    <span className="text-zinc-400 font-medium">Net Subtotal:</span>
-                    <span className="text-zinc-300 font-bold">{company.currency || 'BDT'} {calculateSubtotal().toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                    <span className="text-slate-500 font-medium">Net Subtotal:</span>
+                    <span className="text-slate-800 font-bold">{company.currency || 'BDT'} {calculateSubtotal().toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                   </div>
                   <div className="flex justify-between items-center text-xs">
-                    <span className="text-zinc-400 font-medium">Total VAT Amt:</span>
-                    <span className="text-zinc-300 font-bold">{company.currency || 'BDT'} {calculateTotalVat().toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                    <span className="text-slate-500 font-medium">Total VAT Amt:</span>
+                    <span className="text-slate-800 font-bold">{company.currency || 'BDT'} {calculateTotalVat().toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                   </div>
-                  <div className="flex justify-between items-center text-sm border-t border-zinc-800 pt-2 mt-1">
-                    <span className="font-semibold text-zinc-300">Grand Total Sum:</span>
-                    <span className="text-xl font-black text-indigo-400">{company.currency || 'BDT'} {calculateGrandTotal().toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                  <div className="flex justify-between items-center text-sm border-t border-slate-200 pt-2 mt-1">
+                    <span className="font-semibold text-slate-700">Grand Total Sum:</span>
+                    <span className="text-xl font-black text-indigo-600">{company.currency || 'BDT'} {calculateGrandTotal().toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                   </div>
                   <div className="flex gap-3 mt-2">
                     <button
@@ -1363,7 +2191,7 @@ export default function EstimatesModule({
                         setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0 }]);
                         setSelectedClientName('');
                       }}
-                      className="flex-1 py-2.5 border border-zinc-700 hover:bg-zinc-800 text-zinc-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                      className="flex-1 py-2.5 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-medium transition-colors cursor-pointer"
                     >
                       Cancel Draft
                     </button>
@@ -1380,19 +2208,19 @@ export default function EstimatesModule({
 
               {/* Right Column: Live Proposal Preview */}
               {showPreviewInModal && (
-                <div className="flex-1 bg-zinc-950 p-6 flex flex-col overflow-hidden animate-fade-in">
+                <div className="flex-1 bg-slate-100 p-6 flex flex-col overflow-hidden animate-fade-in">
                   <div className="flex justify-between items-center mb-3 shrink-0">
-                    <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-indigo-400" /> Real-time Client Proposal Preview
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600 animate-pulse" /> Real-time Client Proposal Preview
                     </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium uppercase">
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 border border-indigo-100 font-bold uppercase">
                       Interactive View
                     </span>
                   </div>
                   
                   {/* Live rendered content */}
-                  <div className="flex-1 overflow-y-auto p-4 bg-zinc-900 border border-zinc-800 rounded-xl flex items-start justify-center">
-                    <div className="bg-white text-zinc-950 rounded-lg w-full max-w-2xl shadow-xl overflow-hidden my-auto p-1 text-left">
+                  <div className="flex-1 overflow-y-auto p-4 bg-slate-200 border border-slate-300/60 rounded-xl flex items-start justify-center">
+                    <div className="bg-white text-slate-950 rounded-lg w-full max-w-2xl shadow-xl overflow-hidden my-auto p-1 text-left border border-slate-300">
                       <div dangerouslySetInnerHTML={{ __html: getLivePreviewHTML() }} />
                     </div>
                   </div>

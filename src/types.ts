@@ -39,6 +39,8 @@ export interface User {
   role: UserRole;
   status: 'ACTIVE' | 'INACTIVE';
   companyId: string;
+  password?: string;
+  managerId?: string; // ID of the CS Manager (Supervisor)
 }
 
 export interface Project {
@@ -53,6 +55,23 @@ export interface Project {
   revenueRecognized: number;
 }
 
+export interface LaborRate {
+  id: string;
+  designation: string;
+  department: string;
+  hourlyRate: number;
+}
+
+export interface LaborBreakdownItem {
+  id: string;
+  department: string;
+  designation: string;
+  ftePercentage: string; // e.g. "6%"
+  hourlyRate: number;
+  hours: number;
+  amount: number;
+}
+
 export interface EstimateLineItem {
   id: string;
   description: string;
@@ -65,7 +84,12 @@ export interface EstimateLineItem {
   grandTotal?: number;
   isAgencyFee?: boolean;
   agencyFeeRate?: number;
+  isReimbursementLabor?: boolean;
+  laborItems?: LaborBreakdownItem[];
   selectedLineIndices?: number[];
+  discountPercentage?: number;
+  discountAmount?: number;
+  discountInputMode?: 'percentage' | 'amount';
 }
 
 export interface Estimate {
@@ -189,4 +213,22 @@ export interface Client {
   createdBy?: string;
   approvedBy?: string;
 }
+
+export interface StoredFile {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  dataUrl?: string; // base64 string for preview/simulation
+  uploadedBy: string; // user id of the uploader
+  uploadedByName: string; // friendly uploader name
+  uploadedAt: string;
+  companyId: string;
+  description?: string;
+  projectId?: string; // linked project ID
+  estimateId?: string; // linked estimate ID
+  tags?: string[];
+  isConfidential?: boolean;
+}
+
 

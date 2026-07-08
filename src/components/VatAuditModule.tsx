@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { VendorBill, WorkOrder, Vendor, Company } from '../types';
-import { Check, ShieldAlert, FileText, CheckCircle, ExternalLink } from 'lucide-react';
+import { Check, ShieldAlert, FileText, CheckCircle, ExternalLink, Search, X } from 'lucide-react';
 
 interface VatAuditModuleProps {
   bills: VendorBill[];
@@ -16,7 +16,22 @@ interface VatAuditModuleProps {
 }
 
 export default function VatAuditModule({ bills, workOrders, vendors, company, onVerifyVatDocs }: VatAuditModuleProps) {
+  const [searchTerm, setSearchTerm] = useState('');
+
   const pendingVerificationBills = bills.filter(b => b.status === 'SUBMITTED' || !b.hardcopyReceivedConfirmation);
+
+  const filteredBills = pendingVerificationBills.filter(bill => {
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) return true;
+
+    const wo = workOrders.find(w => w.id === bill.workOrderId);
+    const vend = vendors.find(v => v.id === wo?.vendorId);
+    const supplierName = vend ? vend.businessName.toLowerCase() : '';
+
+    return bill.id.toLowerCase().includes(term) ||
+      bill.workOrderId.toLowerCase().includes(term) ||
+      supplierName.includes(term);
+  });
 
   return (
     <div id="vat-audit-module" className="space-y-6">
@@ -42,13 +57,40 @@ export default function VatAuditModule({ bills, workOrders, vendors, company, on
         </span>
       </div>
 
+      {pendingVerificationBills.length > 0 && (
+        <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-xs">
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <input
+              type="text"
+              placeholder="Search audit queue by bill ID, work order ID, or supplier name..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-400"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-2.5 hover:text-zinc-600 text-zinc-400 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {pendingVerificationBills.length === 0 ? (
         <div className="p-8 text-center bg-white border border-zinc-200 rounded-xl text-zinc-500 text-sm">
           No bills are currently awaiting physical document auditing. Great job keeping the audit queue empty!
         </div>
+      ) : filteredBills.length === 0 ? (
+        <div className="p-8 text-center bg-white border border-zinc-200 rounded-xl text-zinc-500 text-sm">
+          No bills in the audit queue match your search criteria.
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {pendingVerificationBills.map(bill => {
+          {filteredBills.map(bill => {
             const wo = workOrders.find(w => w.id === bill.workOrderId);
             const vend = vendors.find(v => v.id === wo?.vendorId);
 

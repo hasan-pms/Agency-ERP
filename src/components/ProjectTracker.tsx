@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { Project, Company } from '../types';
-import { Briefcase, Calendar, DollarSign, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Briefcase, Calendar, DollarSign, TrendingUp, AlertTriangle, Search, SlidersHorizontal, X } from 'lucide-react';
 
 interface ProjectTrackerProps {
   projects: Project[];
@@ -37,6 +37,12 @@ export default function ProjectTracker({
   const [startDate, setStartDate] = useState('2026-07-01');
   const [endDate, setEndDate] = useState('2026-12-31');
 
+  // Search & Filter States
+  const [searchTerm, setSearchTerm] = useState('');
+  const [minBudget, setMinBudget] = useState('');
+  const [maxBudget, setMaxBudget] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !clientName) return;
@@ -52,6 +58,19 @@ export default function ProjectTracker({
     setBudget(100000);
     setShowNewModal(false);
   };
+
+  const filteredProjects = projects.filter(proj => {
+    const term = searchTerm.toLowerCase().trim();
+    const matchesSearch = !term || 
+      proj.name.toLowerCase().includes(term) || 
+      proj.clientName.toLowerCase().includes(term) ||
+      proj.id.toLowerCase().includes(term);
+    const matchesMinBudget = !minBudget || proj.budget >= Number(minBudget);
+    const matchesMaxBudget = !maxBudget || proj.budget <= Number(maxBudget);
+    return matchesSearch && matchesMinBudget && matchesMaxBudget;
+  });
+
+  const activeFiltersCount = (minBudget ? 1 : 0) + (maxBudget ? 1 : 0);
 
   return (
     <div id="project-tracker-module" className="space-y-6">
@@ -70,8 +89,95 @@ export default function ProjectTracker({
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        {projects.map((proj) => {
+      {/* Elegant Search & Filter Bar */}
+      <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-xs space-y-3">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <input
+              type="text"
+              placeholder="Search by project name, client name, or ID..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-400"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-2.5 hover:text-zinc-600 text-zinc-400 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-all cursor-pointer ${
+              showFilters || activeFiltersCount > 0
+                ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-xs'
+                : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>Filters</span>
+            {activeFiltersCount > 0 && (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">
+                {activeFiltersCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Expandable Advanced Filters */}
+        {showFilters && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-zinc-100 animate-fadeIn">
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Min Budget ({company.currency || 'BDT'})</label>
+              <input
+                type="number"
+                placeholder="No min limit"
+                value={minBudget}
+                onChange={(e) => setMinBudget(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">Max Budget ({company.currency || 'BDT'})</label>
+              <input
+                type="number"
+                placeholder="No max limit"
+                value={maxBudget}
+                onChange={(e) => setMaxBudget(e.target.value)}
+                className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+          </div>
+        )}
+
+        {(searchTerm || activeFiltersCount > 0) && (
+          <div className="flex justify-between items-center text-xs text-zinc-500 pt-1">
+            <span>Found <strong>{filteredProjects.length}</strong> matching projects</span>
+            <button
+              onClick={() => {
+                setSearchTerm('');
+                setMinBudget('');
+                setMaxBudget('');
+              }}
+              className="text-indigo-600 hover:text-indigo-800 font-medium cursor-pointer"
+            >
+              Reset Filters
+            </button>
+          </div>
+        )}
+      </div>
+
+      {filteredProjects.length === 0 ? (
+        <div className="p-12 text-center bg-white border border-zinc-200 rounded-xl text-zinc-500 text-sm">
+          No projects match your current search/filter criteria.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          {filteredProjects.map((proj) => {
           // Dynamic Sales Receive calculation
           const assignedItems = estimates.flatMap(e => e.lineItems || []).filter(item => item.projectId === proj.id);
           const assignedItemIds = assignedItems.map(item => item.id);
@@ -202,6 +308,7 @@ export default function ProjectTracker({
           );
         })}
       </div>
+    )}
 
       {showNewModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
