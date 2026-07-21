@@ -17,6 +17,7 @@ interface EstimatesModuleProps {
   onToggleSidebar?: () => void;
   onCreateClient: (client: Omit<Client, 'id' | 'companyId' | 'isApproved' | 'createdBy'>) => void;
   onApproveClient: (clientId: string) => void;
+  onUpdateClient?: (clientId: string, updatedData: Partial<Client>) => void;
   onCreateEstimate: (estimate: Omit<Estimate, 'id' | 'companyId' | 'createdAt'>) => void;
   onApproveEstimate: (estimateId: string, approverId: string) => void;
   onApproveFinanceEstimate?: (estimateId: string, approverId: string) => void;
@@ -39,6 +40,7 @@ export default function EstimatesModule({
   onToggleSidebar,
   onCreateClient,
   onApproveClient,
+  onUpdateClient,
   onCreateEstimate,
   onApproveEstimate,
   onApproveFinanceEstimate,
@@ -66,14 +68,24 @@ export default function EstimatesModule({
     return d.toISOString().split('T')[0];
   });
   const [selectedLineItemIds, setSelectedLineItemIds] = useState<string[]>([]);
-  const [lineItems, setLineItems] = useState<Omit<EstimateLineItem, 'id' | 'projectId'>[]>([
-    { description: '', qty: 1, rate: 0, amount: 0 }
+
+  // States for inline project creation inside Workbench modal
+  const [showInlineCreateProjModal, setShowInlineCreateProjModal] = useState(false);
+  const [inlineProjTarget, setInlineProjTarget] = useState<'estimate' | number | null>(null);
+  const [inlineProjName, setInlineProjName] = useState('');
+  const [inlineProjStartDate, setInlineProjStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [inlineProjEndDate, setInlineProjEndDate] = useState('');
+
+  const [lineItems, setLineItems] = useState<Omit<EstimateLineItem, 'id'>[]>([
+    { description: '', qty: 1, rate: 0, amount: 0, projectId: '' }
   ]);
 
   const [activeSubTab, setActiveSubTab] = useState<'estimates' | 'clients'>('estimates');
   const [showNewClientModal, setShowNewClientModal] = useState(false);
+  const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [newClientName, setNewClientName] = useState('');
   const [newClientAddress, setNewClientAddress] = useState('');
+  const [newClientCreditDays, setNewClientCreditDays] = useState<number>(30);
 
   // Search & Filter States
   const [searchTerm, setSearchTerm] = useState('');
@@ -300,7 +312,7 @@ export default function EstimatesModule({
   };
 
   const handleAddLine = () => {
-    setLineItems([...lineItems, { description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0 }]);
+    setLineItems([...lineItems, { description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0, projectId: '' }]);
   };
 
   const handleRemoveLine = (idx: number) => {
@@ -435,11 +447,12 @@ export default function EstimatesModule({
         return {
           ...item,
           id: existingId || `item-gen-${Date.now()}-${idx}`,
-          projectId: (editingEst.lineItems || [])[idx]?.projectId || ''
+          projectId: item.projectId || selectedProjectId || ''
         };
       });
 
       const isClientNameEqual = selectedClientName === (editingEst.clientName || '');
+      const isSameProjectId = (selectedProjectId || '') === (editingEst.projectId || '');
       const isSameLineItems = lineItems.length === editingEst.lineItems.length && lineItems.every((item, idx) => {
         const orig = editingEst.lineItems[idx];
         if (!orig) return false;
@@ -452,14 +465,16 @@ export default function EstimatesModule({
           Number(item.vatRate ?? 15) === Number(orig.vatRate ?? 15) &&
           isAgencyFeeEqual &&
           Number(item.agencyFeeRate ?? 10) === Number(orig.agencyFeeRate ?? 10) &&
-          selectedIndicesEqual;
+          selectedIndicesEqual &&
+          (item.projectId || '') === (orig.projectId || '');
       });
 
-      const hasChanges = !isClientNameEqual || !isSameLineItems;
+      const hasChanges = !isClientNameEqual || !isSameProjectId || !isSameLineItems;
 
       if (onEditEstimate) {
         onEditEstimate(editingEst.id, {
           clientName: selectedClientName,
+          projectId: selectedProjectId || '',
           lineItems: itemsWithProject as any,
           totalAmount: calculateTotal(),
           ...(hasChanges ? {} : {
@@ -475,11 +490,11 @@ export default function EstimatesModule({
       const itemsWithProject = lineItems.map((item, idx) => ({
         ...item,
         id: `item-gen-${Date.now()}-${idx}`,
-        projectId: ''
+        projectId: item.projectId || selectedProjectId || ''
       }));
 
       onCreateEstimate({
-        projectId: '',
+        projectId: selectedProjectId || '',
         clientName: selectedClientName,
         csUserId: currentUser.id,
         csManagerApproved: false,
@@ -490,14 +505,16 @@ export default function EstimatesModule({
       });
     }
 
-    setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0 }]);
+    setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0, projectId: '' }]);
     setSelectedClientName('');
+    setSelectedProjectId('');
     setShowNewModal(false);
   };
 
   const handleStartEdit = (est: Estimate) => {
     setEditingEst(est);
     setSelectedClientName(est.clientName || '');
+    setSelectedProjectId(est.projectId || '');
     setLineItems(est.lineItems.map(li => ({
       description: li.description,
       qty: li.qty,
@@ -508,7 +525,8 @@ export default function EstimatesModule({
       grandTotal: li.grandTotal !== undefined ? li.grandTotal : (li.amount * 1.15),
       isAgencyFee: li.isAgencyFee || false,
       agencyFeeRate: li.agencyFeeRate || 10,
-      selectedLineIndices: li.selectedLineIndices || []
+      selectedLineIndices: li.selectedLineIndices || [],
+      projectId: li.projectId || ''
     })));
     setShowNewModal(true);
   };
@@ -518,6 +536,37 @@ export default function EstimatesModule({
     setNewProjName(`${est.clientName || 'Client'} Project`);
     setSelectedLineItemIds((est.lineItems || []).map(li => li.id));
     setShowCreateProjModal(true);
+  };
+
+  const handleConfirmInlineCreateProject = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inlineProjName.trim() || !selectedClientName || !onCreateProject) return;
+
+    const newId = `proj-${Date.now()}`;
+
+    onCreateProject({
+      id: newId,
+      name: inlineProjName.trim(),
+      clientName: selectedClientName,
+      startDate: inlineProjStartDate,
+      endDate: inlineProjEndDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      budget: 0
+    });
+
+    if (inlineProjTarget === 'estimate') {
+      setSelectedProjectId(newId);
+    } else if (typeof inlineProjTarget === 'number') {
+      const updated = [...lineItems];
+      updated[inlineProjTarget] = {
+        ...updated[inlineProjTarget],
+        projectId: newId
+      };
+      setLineItems(updated);
+    }
+
+    setShowInlineCreateProjModal(false);
+    setInlineProjName('');
+    setInlineProjTarget(null);
   };
 
   const handleConfirmCreateProject = (e: React.FormEvent) => {
@@ -862,7 +911,7 @@ export default function EstimatesModule({
             onClick={() => {
               setSelectedProjectId('');
               setSelectedClientName('');
-              setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0 }]);
+              setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0, projectId: '' }]);
               setShowNewModal(true);
             }}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-all shadow-sm cursor-pointer"
@@ -1321,6 +1370,7 @@ export default function EstimatesModule({
                                 <thead>
                                   <tr className="border-b border-zinc-100 text-zinc-400 uppercase tracking-wider text-[10px]">
                                     <th className="pb-2 font-semibold">Scope Description</th>
+                                    <th className="pb-2 font-semibold">Linked Project</th>
                                     <th className="pb-2 text-center font-semibold w-24">Qty</th>
                                     <th className="pb-2 text-right font-semibold w-36">Rate</th>
                                     <th className="pb-2 text-right font-semibold w-36">Net Subtotal</th>
@@ -1337,6 +1387,22 @@ export default function EstimatesModule({
                                     return (
                                       <tr key={item.id || idx} className="hover:bg-zinc-50/20">
                                         <td className="py-2.5 font-medium text-zinc-800">{item.description || <span className="text-zinc-400 italic font-normal">No description provided</span>}</td>
+                                        <td className="py-2.5 font-medium text-zinc-600">
+                                          {(() => {
+                                            const lineProjId = item.projectId;
+                                            if (lineProjId) {
+                                              const lineProj = projects.find(p => p.id === lineProjId);
+                                              return lineProj ? (
+                                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded border border-zinc-250">
+                                                  {lineProj.name}
+                                                </span>
+                                              ) : (
+                                                <span className="text-zinc-400 italic text-[10px]">Unknown Project</span>
+                                              );
+                                            }
+                                            return <span className="text-zinc-400 italic text-[10px]">Same as Estimate</span>;
+                                          })()}
+                                        </td>
                                         <td className="py-2.5 text-center font-mono">{item.qty}</td>
                                         <td className="py-2.5 text-right font-mono">{company.currency || 'BDT'} {item.rate.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                                         <td className="py-2.5 text-right font-mono">{company.currency || 'BDT'} {item.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
@@ -1412,6 +1478,7 @@ export default function EstimatesModule({
                   <tr className="bg-zinc-50 border-b border-zinc-100 text-zinc-600 font-semibold text-xs uppercase tracking-wider">
                     <th className="p-4">Client Name</th>
                     <th className="p-4">Billing Address</th>
+                    <th className="p-4">Credit Terms</th>
                     <th className="p-4">Created By</th>
                     <th className="p-4 text-center">Verification Status</th>
                     <th className="p-4 text-right">Actions</th>
@@ -1420,7 +1487,7 @@ export default function EstimatesModule({
                 <tbody className="divide-y divide-zinc-100 text-zinc-700">
                   {filteredClients.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-zinc-400 italic">No client accounts match your search.</td>
+                      <td colSpan={6} className="p-8 text-center text-zinc-400 italic">No client accounts match your search.</td>
                     </tr>
                   ) : (
                     filteredClients.map((client) => {
@@ -1435,6 +1502,11 @@ export default function EstimatesModule({
                           </td>
                           <td className="p-4 text-zinc-600 max-w-xs truncate" title={client.address}>
                             {client.address}
+                          </td>
+                          <td className="p-4 text-xs font-semibold text-zinc-800">
+                            <span className="bg-zinc-150 text-zinc-800 px-2.5 py-0.5 rounded-md border border-zinc-200">
+                              {client.creditDays !== undefined ? (client.creditDays === 0 ? 'Immediate / Cash' : `Net ${client.creditDays} Days`) : 'Net 30 Days'}
+                            </span>
                           </td>
                           <td className="p-4 text-xs font-mono text-zinc-500">
                             {client.createdBy || 'System Preset'}
@@ -1451,20 +1523,37 @@ export default function EstimatesModule({
                             )}
                           </td>
                           <td className="p-4 text-right">
-                            {!isApproved && (currentUser.role === UserRole.FINANCE_USER || currentUser.role === UserRole.FINANCE_MANAGER || currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.MASTER_ADMIN) ? (
+                            <div className="flex items-center justify-end gap-2.5">
+                              {/* Edit Button */}
                               <button
-                                onClick={() => onApproveClient(client.id)}
-                                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold cursor-pointer transition-colors shadow-sm"
+                                onClick={() => {
+                                  setEditingClient(client);
+                                  setNewClientName(client.name);
+                                  setNewClientAddress(client.address);
+                                  setNewClientCreditDays(client.creditDays !== undefined ? client.creditDays : 30);
+                                  setShowNewClientModal(true);
+                                }}
+                                className="p-1 hover:bg-zinc-150 rounded text-zinc-500 hover:text-indigo-600 cursor-pointer transition-colors"
+                                title="Edit Client Registry Details"
                               >
-                                Approve & Activate
+                                <Pencil className="w-3.5 h-3.5" />
                               </button>
-                            ) : !isApproved ? (
-                              <span className="text-xs text-zinc-400 italic">Awaiting Finance Sign-off</span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-semibold bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded">
-                                <Check className="w-3 h-3 text-emerald-500" /> Active
-                              </span>
-                            )}
+
+                              {!isApproved && (currentUser.role === UserRole.FINANCE_USER || currentUser.role === UserRole.FINANCE_MANAGER || currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.MASTER_ADMIN) ? (
+                                <button
+                                  onClick={() => onApproveClient(client.id)}
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold cursor-pointer transition-colors shadow-sm shrink-0"
+                                >
+                                  Approve & Activate
+                                </button>
+                              ) : !isApproved ? (
+                                <span className="text-xs text-zinc-400 italic shrink-0">Awaiting Finance Sign-off</span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-semibold bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded shrink-0">
+                                  <Check className="w-3 h-3 text-emerald-500" /> Active
+                                </span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1594,8 +1683,9 @@ export default function EstimatesModule({
                   onClick={() => {
                     setShowNewModal(false);
                     setEditingEst(null);
-                    setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0 }]);
+                    setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0, projectId: '' }]);
                     setSelectedClientName('');
+                    setSelectedProjectId('');
                   }} 
                   className="text-slate-400 hover:text-slate-700 cursor-pointer p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
                 >
@@ -1621,14 +1711,15 @@ export default function EstimatesModule({
                       </div>
                     </div>
                   )}
-                  {/* Client Select & Address block */}
-                  <div className="grid grid-cols-1 gap-4">
+                  {/* Client Select & Project Select block */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Client Partner</label>
                       <select
                         value={selectedClientName}
                         onChange={(e) => {
                           setSelectedClientName(e.target.value);
+                          setSelectedProjectId('');
                         }}
                         className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                         required
@@ -1639,7 +1730,63 @@ export default function EstimatesModule({
                         ))}
                       </select>
                       <p className="text-[10px] text-slate-400 mt-1">
-                        Only clients approved by Finance are available for selection. Create and submit a new client in the Client Registry tab first if needed.
+                        Only approved clients are available for selection.
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-1.5">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Linked Project (Estimate Level)</label>
+                        {selectedClientName && onCreateProject && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInlineProjTarget('estimate');
+                              setInlineProjName(`${selectedClientName} - Project`);
+                              setInlineProjStartDate(new Date().toISOString().split('T')[0]);
+                              const d = new Date();
+                              d.setMonth(d.getMonth() + 3);
+                              setInlineProjEndDate(d.toISOString().split('T')[0]);
+                              setShowInlineCreateProjModal(true);
+                            }}
+                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 cursor-pointer"
+                          >
+                            + Create Project
+                          </button>
+                        )}
+                      </div>
+                      <select
+                        value={selectedProjectId}
+                        disabled={!selectedClientName}
+                        onChange={(e) => {
+                          if (e.target.value === '__NEW__') {
+                            setInlineProjTarget('estimate');
+                            setInlineProjName(`${selectedClientName} - Project`);
+                            setInlineProjStartDate(new Date().toISOString().split('T')[0]);
+                            const d = new Date();
+                            d.setMonth(d.getMonth() + 3);
+                            setInlineProjEndDate(d.toISOString().split('T')[0]);
+                            setShowInlineCreateProjModal(true);
+                            setSelectedProjectId('');
+                          } else {
+                            setSelectedProjectId(e.target.value);
+                          }
+                        }}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        <option value="">-- No Project (Unassigned) --</option>
+                        {projects
+                          .filter(p => p.clientName.toLowerCase() === selectedClientName.toLowerCase())
+                          .map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))
+                        }
+                        {selectedClientName && (
+                          <option value="__NEW__" className="text-indigo-600 font-semibold">+ Create New Project...</option>
+                        )}
+                      </select>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Connect this entire proposal to an active or new project.
                       </p>
                     </div>
                   </div>
@@ -1666,11 +1813,12 @@ export default function EstimatesModule({
                     <div className="max-h-[380px] overflow-y-auto pr-1">
                       <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
                         <div className="overflow-x-auto">
-                          <table className="w-full text-left text-xs border-collapse min-w-[950px]">
+                          <table className="w-full text-left text-xs border-collapse min-w-[1100px]">
                             <thead>
                               <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                                 <th className="p-3 w-32">Type</th>
                                 <th className="p-3">Scope Description</th>
+                                <th className="p-3 w-48">Linked Project</th>
                                 <th className="p-3 w-20 text-center">Qty</th>
                                 <th className="p-3 w-32 text-right">Rate ({company.currency || 'BDT'})</th>
                                 <th className="p-3 w-20 text-center">VAT %</th>
@@ -1728,6 +1876,39 @@ export default function EstimatesModule({
                                           onChange={(e) => handleLineChange(idx, 'description', e.target.value)}
                                           className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:ring-1 focus:ring-indigo-500 font-medium"
                                         />
+                                      </td>
+
+                                      {/* Linked Project selector */}
+                                      <td className="p-3">
+                                        <select
+                                          value={item.projectId || ''}
+                                          disabled={!selectedClientName}
+                                          onChange={(e) => {
+                                            if (e.target.value === '__NEW__') {
+                                              setInlineProjTarget(idx);
+                                              setInlineProjName(`${selectedClientName} - Scope ${idx + 1}`);
+                                              setInlineProjStartDate(new Date().toISOString().split('T')[0]);
+                                              const d = new Date();
+                                              d.setMonth(d.getMonth() + 3);
+                                              setInlineProjEndDate(d.toISOString().split('T')[0]);
+                                              setShowInlineCreateProjModal(true);
+                                            } else {
+                                              handleLineChange(idx, 'projectId', e.target.value);
+                                            }
+                                          }}
+                                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-slate-700 focus:bg-white focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                                        >
+                                          <option value="">Default (Estimate-Level)</option>
+                                          {projects
+                                            .filter(p => p.clientName.toLowerCase() === selectedClientName.toLowerCase())
+                                            .map(p => (
+                                              <option key={p.id} value={p.id}>{p.name}</option>
+                                            ))
+                                          }
+                                          {selectedClientName && (
+                                            <option value="__NEW__" className="text-indigo-600 font-semibold">+ Create Project...</option>
+                                          )}
+                                        </select>
                                       </td>
 
                                       {/* Qty Input */}
@@ -2188,8 +2369,9 @@ export default function EstimatesModule({
                       onClick={() => {
                         setShowNewModal(false);
                         setEditingEst(null);
-                        setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0 }]);
+                        setLineItems([{ description: '', qty: 1, rate: 0, amount: 0, vatRate: 15, vatAmount: 0, grandTotal: 0, projectId: '' }]);
                         setSelectedClientName('');
+                        setSelectedProjectId('');
                       }}
                       className="flex-1 py-2.5 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-medium transition-colors cursor-pointer"
                     >
@@ -2380,7 +2562,91 @@ export default function EstimatesModule({
           </div>
         </div>
       )}
-      {/* 5. Create Client Modal */}
+
+      {/* Inline Create Project Modal */}
+      {showInlineCreateProjModal && (
+        <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-xs flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white border border-zinc-200 rounded-2xl shadow-2xl max-w-md w-full flex flex-col overflow-hidden text-zinc-800">
+            {/* Header */}
+            <div className="px-6 py-4 bg-zinc-50 border-b border-zinc-100 flex justify-between items-center shrink-0">
+              <div>
+                <h3 className="font-semibold text-base text-zinc-900">Create New Project</h3>
+                <p className="text-xs text-zinc-500 mt-0.5">Quickly register a new project for {selectedClientName}</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => {
+                  setShowInlineCreateProjModal(false);
+                  setInlineProjTarget(null);
+                }} 
+                className="text-zinc-400 hover:text-zinc-600 cursor-pointer p-1.5 hover:bg-zinc-100 rounded-lg transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleConfirmInlineCreateProject} className="flex-1 flex flex-col overflow-hidden">
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1">Project Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={inlineProjName}
+                    onChange={(e) => setInlineProjName(e.target.value)}
+                    className="w-full p-2.5 border border-zinc-300 rounded-lg text-sm bg-zinc-50 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white transition-all font-medium"
+                  />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1">Start Date</label>
+                    <input
+                      type="date"
+                      required
+                      value={inlineProjStartDate}
+                      onChange={(e) => setInlineProjStartDate(e.target.value)}
+                      className="w-full p-2.5 border border-zinc-300 rounded-lg text-sm bg-zinc-50 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white transition-all font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1">End Date</label>
+                    <input
+                      type="date"
+                      value={inlineProjEndDate}
+                      onChange={(e) => setInlineProjEndDate(e.target.value)}
+                      className="w-full p-2.5 border border-zinc-300 rounded-lg text-sm bg-zinc-50 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white transition-all font-medium"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions Footer */}
+              <div className="p-4 bg-zinc-50 border-t border-zinc-100 flex justify-end gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInlineCreateProjModal(false);
+                    setInlineProjTarget(null);
+                  }}
+                  className="px-4 py-2 border border-zinc-300 hover:bg-zinc-100 rounded-lg text-xs font-semibold text-zinc-700 cursor-pointer transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-md cursor-pointer transition-all"
+                >
+                  Create & Select
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Create / Edit Client Modal */}
       {showNewClientModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden animate-scale-up">
@@ -2389,13 +2655,22 @@ export default function EstimatesModule({
               <div className="flex items-center gap-2">
                 <Building className="w-5 h-5 text-indigo-500" />
                 <div>
-                  <h3 className="text-base font-bold text-white">Register New Client Account</h3>
-                  <p className="text-xs text-zinc-400 mt-0.5">Initiate onboarding. Requires Finance approval before usage.</p>
+                  <h3 className="text-base font-bold text-white">
+                    {editingClient ? 'Edit Client Account Registry' : 'Register New Client Account'}
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {editingClient ? 'Update company details or billing information.' : 'Initiate onboarding. Requires Finance approval before usage.'}
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowNewClientModal(false)}
+                onClick={() => {
+                  setShowNewClientModal(false);
+                  setEditingClient(null);
+                  setNewClientName('');
+                  setNewClientAddress('');
+                }}
                 className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg cursor-pointer transition-all"
               >
                 <XCircle className="w-5 h-5" />
@@ -2406,24 +2681,48 @@ export default function EstimatesModule({
               onSubmit={(e) => {
                 e.preventDefault();
                 if (!newClientName.trim() || !newClientAddress.trim()) return;
-                onCreateClient({
-                  name: newClientName.trim(),
-                  address: newClientAddress.trim()
-                });
+                
+                if (editingClient) {
+                  if (onUpdateClient) {
+                    onUpdateClient(editingClient.id, {
+                      name: newClientName.trim(),
+                      address: newClientAddress.trim(),
+                      creditDays: newClientCreditDays
+                    });
+                  }
+                } else {
+                  onCreateClient({
+                    name: newClientName.trim(),
+                    address: newClientAddress.trim(),
+                    creditDays: newClientCreditDays
+                  });
+                }
                 setShowNewClientModal(false);
+                setEditingClient(null);
                 setNewClientName('');
                 setNewClientAddress('');
+                setNewClientCreditDays(30);
               }}
               className="flex-1 flex flex-col min-h-0"
             >
               <div className="p-6 space-y-4 flex-1 overflow-y-auto">
-                <div className="bg-amber-500/10 border border-amber-500/20 p-3.5 rounded-xl flex items-start gap-2.5">
-                  <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                  <div className="text-xs text-amber-200/90 leading-relaxed">
-                    <strong className="font-semibold block mb-0.5">CS Onboarding Compliance</strong>
-                    As a Client Services user, creating this account establishes a draft state. It will be routed to the <strong className="text-amber-300">Finance Team</strong> queue for approval. You will not be able to issue estimates until they approve.
+                {editingClient ? (
+                  <div className="bg-indigo-500/10 border border-indigo-500/20 p-3.5 rounded-xl flex items-start gap-2.5">
+                    <ShieldAlert className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                    <div className="text-xs text-indigo-200/90 leading-relaxed">
+                      <strong className="font-semibold block mb-0.5">Edit Client Account Details</strong>
+                      You are editing an existing client registry item. Any changes will immediately update the active client records.
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="bg-amber-500/10 border border-amber-500/20 p-3.5 rounded-xl flex items-start gap-2.5">
+                    <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <div className="text-xs text-amber-200/90 leading-relaxed">
+                      <strong className="font-semibold block mb-0.5">CS Onboarding Compliance</strong>
+                      As a Client Services user, creating this account establishes a draft state. It will be routed to the <strong className="text-amber-300">Finance Team</strong> queue for approval. You will not be able to issue estimates until they approve.
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 uppercase tracking-wider mb-1.5">Client Company Name</label>
@@ -2448,13 +2747,39 @@ export default function EstimatesModule({
                     required
                   />
                 </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 uppercase tracking-wider mb-1.5">Payment Terms / Credit Line</label>
+                  <select
+                    value={newClientCreditDays}
+                    onChange={(e) => setNewClientCreditDays(Number(e.target.value))}
+                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded-lg text-sm text-white focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                  >
+                    <option value={0}>Immediate / Cash (Net 0)</option>
+                    <option value={7}>Net 7 Days</option>
+                    <option value={15}>Net 15 Days</option>
+                    <option value={30}>Net 30 Days (Standard)</option>
+                    <option value={45}>Net 45 Days</option>
+                    <option value={60}>Net 60 Days</option>
+                    <option value={90}>Net 90 Days</option>
+                  </select>
+                  <p className="text-[10px] text-zinc-400 mt-1 leading-normal">
+                    The payment terms determine the grace period given to this client. Invoices generated for this client's projects or estimates will automatically calculate their due date based on this setting.
+                  </p>
+                </div>
               </div>
 
               {/* Actions */}
               <div className="p-4 bg-zinc-950 border-t border-zinc-800 flex justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setShowNewClientModal(false)}
+                  onClick={() => {
+                    setShowNewClientModal(false);
+                    setEditingClient(null);
+                    setNewClientName('');
+                    setNewClientAddress('');
+                    setNewClientCreditDays(30);
+                  }}
                   className="px-4 py-2 border border-zinc-700 hover:bg-zinc-800 rounded-lg text-xs font-semibold text-zinc-300 cursor-pointer transition-colors"
                 >
                   Cancel
@@ -2463,7 +2788,7 @@ export default function EstimatesModule({
                   type="submit"
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-md cursor-pointer transition-all"
                 >
-                  Submit & Request Approval
+                  {editingClient ? 'Save Changes' : 'Submit & Request Approval'}
                 </button>
               </div>
             </form>

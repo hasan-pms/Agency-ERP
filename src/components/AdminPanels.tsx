@@ -351,7 +351,7 @@ export function UserManagementPanel({ users, activeCompanyId, onAddUser, compani
   const [selectedManagerId, setSelectedManagerId] = useState('');
   const [userSuccess, setUserSuccess] = useState('');
 
-  const currentCompany = companies.find(c => c.id === activeCompanyId) || companies[0];
+  const currentCompany = companies.find(c => c.id === activeCompanyId) || companies[0] || { id: activeCompanyId, name: 'Loading...', currency: 'BDT' };
   const csManagers = users.filter(u => u.companyId === activeCompanyId && u.role === UserRole.CS_MANAGER);
 
   const handleCreateUser = (e: FormEvent) => {

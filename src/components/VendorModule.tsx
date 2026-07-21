@@ -40,9 +40,9 @@ export default function VendorModule({
   const vendorAdvances = advances.filter(a => vendorWorkOrders.some(wo => wo.id === a.workOrderId));
 
   // Edit State
-  const [bankName, setBankName] = useState(activeVendor?.bankDetails.bankName || '');
-  const [accountNo, setAccountNo] = useState(activeVendor?.bankDetails.accountNo || '');
-  const [routingNo, setRoutingNo] = useState(activeVendor?.bankDetails.routingNo || '');
+  const [bankName, setBankName] = useState(activeVendor?.bankDetails?.bankName || '');
+  const [accountNo, setAccountNo] = useState(activeVendor?.bankDetails?.accountNo || '');
+  const [routingNo, setRoutingNo] = useState(activeVendor?.bankDetails?.routingNo || '');
   const [isSaved, setIsSaved] = useState(false);
 
   // Bill Submit state

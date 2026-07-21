@@ -4,6 +4,13 @@
  */
 
 import { useState, useEffect, FormEvent } from 'react';
+import { 
+  seedCollectionIfEmpty, 
+  subscribeToCollection, 
+  saveRecordToFirestore, 
+  deleteRecordFromFirestore, 
+  Collections 
+} from './lib/firebase';
 import {
   UserRole,
   Company,
@@ -18,7 +25,11 @@ import {
   Payment,
   Client,
   StoredFile,
-  LaborRate
+  LaborRate,
+  Collection,
+  MotherLedger,
+  DetailLedger,
+  AccountGroup
 } from './types';
 
 import {
@@ -46,6 +57,8 @@ import VatAuditModule from './components/VatAuditModule';
 import CompanySettings from './components/CompanySettings';
 import DocumentStorageModule from './components/DocumentStorageModule';
 import LaborRateCardModule from './components/LaborRateCardModule';
+import CollectionsModule from './components/CollectionsModule';
+import ChartOfAccountsModule from './components/ChartOfAccountsModule';
 import { MasterAdminPanel, UserManagementPanel } from './components/AdminPanels';
 
 import {
@@ -68,8 +81,88 @@ import {
   Search,
   ExternalLink,
   UploadCloud,
-  Users
+  Users,
+  AlertTriangle,
+  Coins,
+  Database
 } from 'lucide-react';
+
+const INITIAL_MOTHER_LEDGERS: MotherLedger[] = [
+  { id: 'ml-assets-cash', companyId: 'comp-acme', group: 'ASSETS', code: '1000', name: 'Cash & Cash Equivalents', description: 'Immediate liquid assets and bank accounts' },
+  { id: 'ml-assets-ar', companyId: 'comp-acme', group: 'ASSETS', code: '1100', name: 'Accounts Receivable', description: 'Customer invoices pending collection' },
+  { id: 'ml-liab-ap', companyId: 'comp-acme', group: 'LIABILITIES', code: '2000', name: 'Accounts Payable', description: 'Vendor bills pending payout' },
+  { id: 'ml-liab-tax', companyId: 'comp-acme', group: 'LIABILITIES', code: '2100', name: 'VAT & Tax Payables', description: 'Withheld VDS/TDS output payables' },
+  { id: 'ml-eq-share', companyId: 'comp-acme', group: 'EQUITY', code: '3000', name: 'Share Capital', description: 'Ordinary share capital investments' },
+  { id: 'ml-eq-re', companyId: 'comp-acme', group: 'EQUITY', code: '3100', name: 'Retained Earnings', description: 'Prior period accumulated earnings' },
+  { id: 'ml-rev-op', companyId: 'comp-acme', group: 'REVENUE', code: '4000', name: 'Operating Revenue', description: 'Main business service and SaaS sales' },
+  { id: 'ml-exp-cos', companyId: 'comp-acme', group: 'EXPENSES', code: '5000', name: 'Cost of Sales (COGS)', description: 'Direct project execution and subcontractor costs' },
+  { id: 'ml-exp-admin', companyId: 'comp-acme', group: 'EXPENSES', code: '5100', name: 'Administrative Expenses', description: 'Office rent, utilities, and corporate costs' },
+];
+
+const INITIAL_DETAIL_LEDGERS: DetailLedger[] = [
+  { id: 'dl-prime', companyId: 'comp-acme', motherLedgerId: 'ml-assets-cash', code: '1001', name: 'Prime Bank Current A/C', description: 'Primary operations account #2291', balance: 5400000, currency: 'BDT' },
+  { id: 'dl-scb', companyId: 'comp-acme', motherLedgerId: 'ml-assets-cash', code: '1002', name: 'Standard Chartered BDT A/C', description: 'Treasury operations account #8812', balance: 12300000, currency: 'BDT' },
+  { id: 'dl-hand', companyId: 'comp-acme', motherLedgerId: 'ml-assets-cash', code: '1003', name: 'Cash in Vault', description: 'Office petty cash drawer', balance: 250000, currency: 'BDT' },
+  
+  { id: 'dl-ar-trade', companyId: 'comp-acme', motherLedgerId: 'ml-assets-ar', code: '1101', name: 'Client Trade Receivables', description: 'Outstanding client invoices', balance: 3500000, currency: 'BDT' },
+  { id: 'dl-ar-vds', companyId: 'comp-acme', motherLedgerId: 'ml-assets-ar', code: '1102', name: 'VDS Receivable Control', description: 'withheld VAT by clients awaiting tax clearance', balance: 750000, currency: 'BDT' },
+  { id: 'dl-ar-tds', companyId: 'comp-acme', motherLedgerId: 'ml-assets-ar', code: '1103', name: 'TDS Receivable Control', description: 'withheld Tax by clients awaiting tax clearance', balance: 420000, currency: 'BDT' },
+  
+  { id: 'dl-ap-trade', companyId: 'comp-acme', motherLedgerId: 'ml-liab-ap', code: '2001', name: 'Trade Payables / Subcontractors', description: 'Outstanding vendor payouts', balance: -1800000, currency: 'BDT' },
+  { id: 'dl-vat-out', companyId: 'comp-acme', motherLedgerId: 'ml-liab-tax', code: '2101', name: 'VAT Output Control Account', description: 'VAT payable on sales', balance: -950000, currency: 'BDT' },
+  
+  { id: 'dl-eq-ord', companyId: 'comp-acme', motherLedgerId: 'ml-eq-share', code: '3001', name: 'Ordinary Share Capital', description: 'Owner initial investment', balance: -15000000, currency: 'BDT' },
+  { id: 'dl-eq-prior', companyId: 'comp-acme', motherLedgerId: 'ml-eq-re', code: '3101', name: 'Retained Earnings Prior Year', description: 'Accumulated profits', balance: -3200000, currency: 'BDT' },
+  
+  { id: 'dl-rev-saas', companyId: 'comp-acme', motherLedgerId: 'ml-rev-op', code: '4001', name: 'SaaS Contract Revenues', description: 'Recurring client contract payments', balance: -4500000, currency: 'BDT' },
+  { id: 'dl-rev-proj', companyId: 'comp-acme', motherLedgerId: 'ml-rev-op', code: '4002', name: 'Project Implementation Income', description: 'Professional consulting fees', balance: -2100000, currency: 'BDT' },
+  
+  { id: 'dl-exp-labor', companyId: 'comp-acme', motherLedgerId: 'ml-exp-cos', code: '5001', name: 'Direct Labor Costs', description: 'In-house staff execution cost', balance: 1500000, currency: 'BDT' },
+  { id: 'dl-exp-sub', companyId: 'comp-acme', motherLedgerId: 'ml-exp-cos', code: '5002', name: 'Subcontractor Cost of Execution', description: 'Vendor execution charges', balance: 2400000, currency: 'BDT' },
+  { id: 'dl-exp-rent', companyId: 'comp-acme', motherLedgerId: 'ml-exp-admin', code: '5101', name: 'Office Rent & Utilities', description: 'Corporate office lease & internet', balance: 380000, currency: 'BDT' },
+];
+
+const INITIAL_COLLECTIONS: Collection[] = [
+  {
+    id: 'COL-001',
+    companyId: 'comp-acme',
+    invoiceId: 'INV-101',
+    invoiceRef: 'INV-101',
+    clientName: 'Skyline Assets Group Inc',
+    invoiceAmount: 2200000,
+    vdsDeduction: 110000, // 5%
+    tdsDeduction: 220000, // 10%
+    otherDeduction: 0,
+    netCollected: 1870000,
+    collectionDate: '2026-06-28',
+    paymentMethod: 'Bank Transfer',
+    referenceNo: 'TXN-998012',
+    status: 'CLEARED',
+    recordedBy: 'Robert CS Manager',
+    remarks: 'Funds cleared standard settlement bank routing',
+    createdAt: '2026-06-28T10:00:00Z'
+  },
+  {
+    id: 'COL-002',
+    companyId: 'comp-acme',
+    invoiceId: 'INV-102',
+    invoiceRef: 'INV-102',
+    clientName: 'Enterprise Cloud Technologies',
+    invoiceAmount: 1450000,
+    vdsDeduction: 108750, // 7.5%
+    tdsDeduction: 145000, // 10%
+    otherDeduction: 20000,
+    otherDeductionReason: 'Waiver for prompt sign-off',
+    netCollected: 1176250,
+    collectionDate: '2026-07-02',
+    paymentMethod: 'Cheque',
+    referenceNo: 'CHQ-882012',
+    status: 'PENDING_CLEARING',
+    recordedBy: 'Sarah CS Representative',
+    remarks: 'Cheque received and deposited to City Bank BDT',
+    createdAt: '2026-07-02T14:30:00Z'
+  }
+];
 
 export default function App() {
   // Load simulated DB from localstorage or use defaults
@@ -214,6 +307,21 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_LABOR_RATES;
   });
 
+  const [collections, setCollections] = useState<Collection[]>(() => {
+    const saved = localStorage.getItem('erp_collections');
+    return saved ? JSON.parse(saved) : INITIAL_COLLECTIONS;
+  });
+
+  const [motherLedgers, setMotherLedgers] = useState<MotherLedger[]>(() => {
+    const saved = localStorage.getItem('erp_mother_ledgers');
+    return saved ? JSON.parse(saved) : INITIAL_MOTHER_LEDGERS;
+  });
+
+  const [detailLedgers, setDetailLedgers] = useState<DetailLedger[]>(() => {
+    const saved = localStorage.getItem('erp_detail_ledgers');
+    return saved ? JSON.parse(saved) : INITIAL_DETAIL_LEDGERS;
+  });
+
   // Current simulation state
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
     const saved = localStorage.getItem('erp_logged_in');
@@ -246,7 +354,7 @@ export default function App() {
 
   const [activeCompanyId, setActiveCompanyId] = useState('comp-acme');
   const [activeUserId, setActiveUserId] = useState('user-admin');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'estimates' | 'invoices' | 'projects' | 'workorders' | 'payments' | 'vat-dept' | 'vendor-portal' | 'architecture' | 'settings' | 'master-admin-panel' | 'user-mgmt' | 'document-hub' | 'labor-rates'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'estimates' | 'invoices' | 'projects' | 'workorders' | 'payments' | 'vat-dept' | 'vendor-portal' | 'architecture' | 'settings' | 'master-admin-panel' | 'user-mgmt' | 'document-hub' | 'labor-rates' | 'collections' | 'chart-of-accounts'>('dashboard');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [invoicePreselectedEstimateId, setInvoicePreselectedEstimateId] = useState<string | null>(null);
 
@@ -308,8 +416,141 @@ export default function App() {
     localStorage.setItem('erp_labor_rates', JSON.stringify(laborRates));
   }, [laborRates]);
 
+  useEffect(() => {
+    localStorage.setItem('erp_collections', JSON.stringify(collections));
+  }, [collections]);
+
+  useEffect(() => {
+    localStorage.setItem('erp_mother_ledgers', JSON.stringify(motherLedgers));
+  }, [motherLedgers]);
+
+  useEffect(() => {
+    localStorage.setItem('erp_detail_ledgers', JSON.stringify(detailLedgers));
+  }, [detailLedgers]);
+
+  // --- FIREBASE SYNC INTEGRATION ---
+  const [firebaseSyncStatus, setFirebaseSyncStatus] = useState<'initializing' | 'live' | 'error'>('initializing');
+
+  useEffect(() => {
+    async function initAndSyncFirebase() {
+      try {
+        setFirebaseSyncStatus('initializing');
+        
+        // One-time seeding of all collections if they are completely empty in Firestore
+        await Promise.all([
+          seedCollectionIfEmpty(Collections.COMPANIES, INITIAL_COMPANIES),
+          seedCollectionIfEmpty(Collections.USERS, INITIAL_USERS),
+          seedCollectionIfEmpty(Collections.PROJECTS, INITIAL_PROJECTS),
+          seedCollectionIfEmpty(Collections.ESTIMATES, INITIAL_ESTIMATES),
+          seedCollectionIfEmpty(Collections.INVOICES, INITIAL_INVOICES),
+          seedCollectionIfEmpty(Collections.VENDORS, INITIAL_VENDORS),
+          seedCollectionIfEmpty(Collections.WORK_ORDERS, INITIAL_WORK_ORDERS),
+          seedCollectionIfEmpty(Collections.VENDOR_BILLS, INITIAL_VENDOR_BILLS),
+          seedCollectionIfEmpty(Collections.ADVANCE_REQUESTS, INITIAL_ADVANCE_REQUESTS),
+          seedCollectionIfEmpty(Collections.PAYMENTS, INITIAL_PAYMENTS),
+          seedCollectionIfEmpty(Collections.RECEIVABLE_COLLECTIONS, INITIAL_COLLECTIONS),
+          seedCollectionIfEmpty(Collections.MOTHER_LEDGERS, INITIAL_MOTHER_LEDGERS),
+          seedCollectionIfEmpty(Collections.DETAIL_LEDGERS, INITIAL_DETAIL_LEDGERS),
+          seedCollectionIfEmpty('clients', [
+            { id: 'cli-skyline', companyId: 'comp-acme', name: 'Skyline Assets Group Inc', address: '452 Skyline Parkway, Suite 100, New York, NY 10001', isApproved: true },
+            { id: 'cli-pipeline', companyId: 'comp-acme', name: 'Enterprise Cloud Technologies', address: '1024 Automation Way, Silicon Valley, CA 94025', isApproved: true },
+            { id: 'cli-marina', companyId: 'comp-acme', name: 'Waterfront Developers Ltd', address: '88 Marina Blvd, San Francisco, CA 94109', isApproved: true },
+            { id: 'cli-globbuilders', companyId: 'comp-acme', name: 'Global Builders Inc', address: '789 Construction Ave, Chicago, IL 60611', isApproved: true }
+          ]),
+          seedCollectionIfEmpty('laborrates', INITIAL_LABOR_RATES),
+          seedCollectionIfEmpty('files', [
+            {
+              id: 'file-101',
+              name: 'Skyline_Site_Plan_Approved.pdf',
+              size: 2450000,
+              type: 'application/pdf',
+              uploadedBy: 'user-cs-u',
+              uploadedByName: 'Sarah CS Representative',
+              uploadedAt: '2026-06-15T09:30:00Z',
+              companyId: 'comp-acme',
+              description: 'Detailed site plans for the Skyline office complex including approved fire access layouts.',
+              projectId: 'proj-skyline',
+              tags: ['Blueprint', 'Approval', 'Site Plan']
+            },
+            {
+              id: 'file-102',
+              name: 'Automation_Core_SLA_V2.docx',
+              size: 850000,
+              type: 'application/msword',
+              uploadedBy: 'user-cs-u',
+              uploadedByName: 'Sarah CS Representative',
+              uploadedAt: '2026-06-18T14:15:00Z',
+              companyId: 'comp-acme',
+              description: 'Service Level Agreement draft with Enterprise Cloud Technologies.',
+              projectId: 'proj-pipeline',
+              tags: ['Agreement', 'Contract', 'SLA']
+            },
+            {
+              id: 'file-103',
+              name: 'Acme_Q1_Financials_Internal.xlsx',
+              size: 154000,
+              type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              uploadedBy: 'user-cs-m',
+              uploadedByName: 'Robert CS Manager',
+              uploadedAt: '2026-06-20T11:00:00Z',
+              companyId: 'comp-acme',
+              description: 'Internal project costing margins, revenue projections, and QBO reconciliation reports.',
+              projectId: 'proj-marina',
+              tags: ['Financials', 'Spreadsheet', 'QBO'],
+              isConfidential: true
+            }
+          ])
+        ]);
+
+        setFirebaseSyncStatus('live');
+      } catch (err) {
+        console.error('Firebase seeding or subscription failed:', err);
+        setFirebaseSyncStatus('error');
+      }
+    }
+
+    initAndSyncFirebase();
+
+    // Subscribe to collections for real-time updates
+    const unsubCompanies = subscribeToCollection<Company>(Collections.COMPANIES, setCompanies);
+    const unsubUsers = subscribeToCollection<User>(Collections.USERS, setUsers);
+    const unsubProjects = subscribeToCollection<Project>(Collections.PROJECTS, setProjects);
+    const unsubEstimates = subscribeToCollection<Estimate>(Collections.ESTIMATES, setEstimates);
+    const unsubInvoices = subscribeToCollection<Invoice>(Collections.INVOICES, setInvoices);
+    const unsubVendors = subscribeToCollection<Vendor>(Collections.VENDORS, setVendors);
+    const unsubWorkOrders = subscribeToCollection<WorkOrder>(Collections.WORK_ORDERS, setWorkOrders);
+    const unsubBills = subscribeToCollection<VendorBill>(Collections.VENDOR_BILLS, setBills);
+    const unsubAdvances = subscribeToCollection<AdvanceRequest>(Collections.ADVANCE_REQUESTS, setAdvanceRequests);
+    const unsubPayments = subscribeToCollection<Payment>(Collections.PAYMENTS, setPayments);
+    const unsubClients = subscribeToCollection<Client>('clients', setClients);
+    const unsubFiles = subscribeToCollection<StoredFile>('files', setFiles);
+    const unsubLaborRates = subscribeToCollection<LaborRate>('laborrates', setLaborRates);
+    const unsubCollections = subscribeToCollection<Collection>(Collections.RECEIVABLE_COLLECTIONS, setCollections);
+    const unsubMotherLedgers = subscribeToCollection<MotherLedger>(Collections.MOTHER_LEDGERS, setMotherLedgers);
+    const unsubDetailLedgers = subscribeToCollection<DetailLedger>(Collections.DETAIL_LEDGERS, setDetailLedgers);
+
+    return () => {
+      unsubCompanies();
+      unsubUsers();
+      unsubProjects();
+      unsubEstimates();
+      unsubInvoices();
+      unsubVendors();
+      unsubWorkOrders();
+      unsubBills();
+      unsubAdvances();
+      unsubPayments();
+      unsubClients();
+      unsubFiles();
+      unsubLaborRates();
+      unsubCollections();
+      unsubMotherLedgers();
+      unsubDetailLedgers();
+    };
+  }, []);
+
   // Derived state values
-  const currentUser = users.find(u => u.id === activeUserId) || users[0];
+  const currentUser = users.find(u => u.id === activeUserId) || users[0] || INITIAL_USERS[0];
 
   // Security lock: Non-Master Admins and normal staff are strictly bound to their companyId
   useEffect(() => {
@@ -320,7 +561,7 @@ export default function App() {
     }
   }, [isLoggedIn, currentUser, activeCompanyId]);
 
-  const currentCompany = companies.find(c => c.id === activeCompanyId) || companies[0];
+  const currentCompany = companies.find(c => c.id === activeCompanyId) || companies[0] || INITIAL_COMPANIES[0];
 
   // Access constraints helper based on the user's selected role
   const isAllowedTab = (tabName: string) => {
@@ -349,6 +590,9 @@ export default function App() {
         return [UserRole.CS_USER, UserRole.CS_MANAGER, UserRole.FINANCE_USER].includes(role);
       case 'payments':
         return [UserRole.FINANCE_USER, UserRole.FINANCE_MANAGER].includes(role);
+      case 'collections':
+      case 'chart-of-accounts':
+        return [UserRole.FINANCE_USER, UserRole.FINANCE_MANAGER].includes(role);
       case 'vat-dept':
         return role === UserRole.VAT_DEPT_USER;
       case 'vendor-portal':
@@ -374,7 +618,7 @@ export default function App() {
   }, [activeUserId]);
 
   // Handler helpers
-  const handleCreateProject = (projData: Omit<Project, 'companyId' | 'costIncurred' | 'revenueRecognized'> & { id?: string }) => {
+  const handleCreateProject = async (projData: Omit<Project, 'companyId' | 'costIncurred' | 'revenueRecognized'> & { id?: string }) => {
     const newProj: Project = {
       ...projData,
       id: projData.id || `proj-gen-${Date.now()}`,
@@ -382,29 +626,28 @@ export default function App() {
       costIncurred: 0,
       revenueRecognized: 0
     };
-    setProjects([newProj, ...projects]);
+    await saveRecordToFirestore(Collections.PROJECTS, newProj);
   };
 
-  const handleLinkProjectToEstimate = (estimateId: string, projectId: string, selectedLineItemIds: string[]) => {
-    setEstimates(estimates.map(est => {
-      if (est.id === estimateId) {
-        const updatedLineItems = (est.lineItems || []).map(item => {
-          if (selectedLineItemIds.includes(item.id)) {
-            return { ...item, projectId };
-          }
-          return item;
-        });
-        return {
-          ...est,
-          projectId,
-          lineItems: updatedLineItems
-        };
-      }
-      return est;
-    }));
+  const handleLinkProjectToEstimate = async (estimateId: string, projectId: string, selectedLineItemIds: string[]) => {
+    const est = estimates.find(e => e.id === estimateId);
+    if (est) {
+      const updatedLineItems = (est.lineItems || []).map(item => {
+        if (selectedLineItemIds.includes(item.id)) {
+          return { ...item, projectId };
+        }
+        return item;
+      });
+      const updatedEst = {
+        ...est,
+        projectId,
+        lineItems: updatedLineItems
+      };
+      await saveRecordToFirestore(Collections.ESTIMATES, updatedEst);
+    }
   };
 
-  const handleCreateEstimate = (estData: Omit<Estimate, 'id' | 'companyId' | 'createdAt'>) => {
+  const handleCreateEstimate = async (estData: Omit<Estimate, 'id' | 'companyId' | 'createdAt'>) => {
     const newEst: Estimate = {
       ...estData,
       id: `est-gen-${Math.floor(Math.random() * 899) + 100}`,
@@ -412,81 +655,77 @@ export default function App() {
       createdAt: new Date().toISOString(),
       financeApproved: false
     };
-    setEstimates([newEst, ...estimates]);
+    await saveRecordToFirestore(Collections.ESTIMATES, newEst);
   };
 
-  const handleApproveEstimate = (estId: string, approverId: string) => {
-    setEstimates(estimates.map(est => {
-      if (est.id === estId) {
-        const nextCsApproved = true;
-        const nextFinApproved = est.financeApproved || false;
-        const nextStatus = (nextCsApproved && nextFinApproved) ? 'APPROVED' : est.clientStatus;
-        return { 
-          ...est, 
-          csManagerApproved: nextCsApproved, 
-          csManagerApproverId: approverId, 
-          clientStatus: nextStatus as any 
-        };
-      }
-      return est;
-    }));
+  const handleApproveEstimate = async (estId: string, approverId: string) => {
+    const est = estimates.find(e => e.id === estId);
+    if (est) {
+      const nextCsApproved = true;
+      const nextFinApproved = est.financeApproved || false;
+      const nextStatus = (nextCsApproved && nextFinApproved) ? 'APPROVED' : est.clientStatus;
+      const updatedEst = { 
+        ...est, 
+        csManagerApproved: nextCsApproved, 
+        csManagerApproverId: approverId, 
+        clientStatus: nextStatus as any 
+      };
+      await saveRecordToFirestore(Collections.ESTIMATES, updatedEst);
+    }
   };
 
-  const handleApproveFinanceEstimate = (estId: string, approverId: string) => {
-    setEstimates(estimates.map(est => {
-      if (est.id === estId) {
-        const nextCsApproved = est.csManagerApproved || false;
-        const nextFinApproved = true;
-        const nextStatus = (nextCsApproved && nextFinApproved) ? 'APPROVED' : est.clientStatus;
-        return { 
-          ...est, 
-          financeApproved: nextFinApproved, 
-          financeApproverId: approverId, 
-          clientStatus: nextStatus as any 
-        };
-      }
-      return est;
-    }));
+  const handleApproveFinanceEstimate = async (estId: string, approverId: string) => {
+    const est = estimates.find(e => e.id === estId);
+    if (est) {
+      const nextCsApproved = est.csManagerApproved || false;
+      const nextFinApproved = true;
+      const nextStatus = (nextCsApproved && nextFinApproved) ? 'APPROVED' : est.clientStatus;
+      const updatedEst = { 
+        ...est, 
+        financeApproved: nextFinApproved, 
+        financeApproverId: approverId, 
+        clientStatus: nextStatus as any 
+      };
+      await saveRecordToFirestore(Collections.ESTIMATES, updatedEst);
+    }
   };
 
-  const handleRejectEstimate = (estId: string, notes: string) => {
-    setEstimates(estimates.map(est => {
-      if (est.id === estId) {
-        return { 
-          ...est, 
-          csManagerApproved: false, 
-          financeApproved: false, 
-          clientStatus: 'REJECTED', 
-          rejectionNotes: notes 
-        };
-      }
-      return est;
-    }));
+  const handleRejectEstimate = async (estId: string, notes: string) => {
+    const est = estimates.find(e => e.id === estId);
+    if (est) {
+      const updatedEst = { 
+        ...est, 
+        csManagerApproved: false, 
+        financeApproved: false, 
+        clientStatus: 'REJECTED' as const, 
+        rejectionNotes: notes 
+      };
+      await saveRecordToFirestore(Collections.ESTIMATES, updatedEst);
+    }
   };
 
-  const handleEditEstimate = (estId: string, updatedData: Partial<Estimate>) => {
-    setEstimates(estimates.map(est => {
-      if (est.id === estId) {
-        return {
-          ...est,
-          csManagerApproved: false,
-          financeApproved: false,
-          clientStatus: 'DRAFT' as const,
-          ...updatedData
-        };
-      }
-      return est;
-    }));
+  const handleEditEstimate = async (estId: string, updatedData: Partial<Estimate>) => {
+    const est = estimates.find(e => e.id === estId);
+    if (est) {
+      const updatedEst = {
+        ...est,
+        csManagerApproved: false,
+        financeApproved: false,
+        clientStatus: 'DRAFT' as const,
+        ...updatedData
+      };
+      await saveRecordToFirestore(Collections.ESTIMATES, updatedEst);
+    }
   };
 
-  const handleSyncQBOEstimate = (estId: string, qboId: string) => {
-    setEstimates(estimates.map(est => {
-      if (est.id === estId) return { ...est, qboId };
-      return est;
-    }));
+  const handleSyncQBOEstimate = async (estId: string, qboId: string) => {
+    const est = estimates.find(e => e.id === estId);
+    if (est) {
+      await saveRecordToFirestore(Collections.ESTIMATES, { ...est, qboId });
+    }
   };
 
-  const handleCreateInvoice = (invData: Omit<Invoice, 'id' | 'companyId' | 'createdAt'>) => {
+  const handleCreateInvoice = async (invData: Omit<Invoice, 'id' | 'companyId' | 'createdAt'>) => {
     const newInv: Invoice = {
       ...invData,
       id: `inv-gen-${Math.floor(Math.random() * 899) + 100}`,
@@ -494,144 +733,186 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    setInvoices([newInv, ...invoices]);
+    await saveRecordToFirestore(Collections.INVOICES, newInv);
     setInvoicePreselectedEstimateId(null);
 
     // Update Project Cost/Revenue tracking metrics
     const relatedEst = estimates.find(e => invData.estimateIds.includes(e.id));
     if (relatedEst) {
-      setProjects(projects.map(p => {
-        if (p.id === relatedEst.projectId) {
-          return {
-            ...p,
-            revenueRecognized: p.revenueRecognized + invData.totalAmount
-          };
-        }
-        return p;
-      }));
+      const p = projects.find(proj => proj.id === relatedEst.projectId);
+      if (p) {
+        await saveRecordToFirestore(Collections.PROJECTS, {
+          ...p,
+          revenueRecognized: p.revenueRecognized + invData.totalAmount
+        });
+      }
     }
   };
 
-  const handleUpdateInvoice = (invoiceId: string, updatedData: Partial<Invoice>) => {
-    setInvoices(invoices.map(inv => {
-      if (inv.id === invoiceId) {
-        return {
-          ...inv,
-          ...updatedData
-        };
+  const handleUpdateInvoice = async (invoiceId: string, updatedData: Partial<Invoice>) => {
+    const inv = invoices.find(i => i.id === invoiceId);
+    if (inv) {
+      await saveRecordToFirestore(Collections.INVOICES, {
+        ...inv,
+        ...updatedData
+      });
+    }
+  };
+
+  const handleSyncInvoiceQBO = async (invId: string, qboId: string) => {
+    const inv = invoices.find(i => i.id === invId);
+    if (inv) {
+      await saveRecordToFirestore(Collections.INVOICES, { ...inv, qboId });
+    }
+  };
+
+  const handleCreateCollection = async (colData: Omit<Collection, 'id' | 'companyId' | 'createdAt'>) => {
+    const newCollection: Collection = {
+      ...colData,
+      id: `COL-${Math.floor(Math.random() * 899) + 100}`,
+      companyId: activeCompanyId,
+      createdAt: new Date().toISOString()
+    };
+    await saveRecordToFirestore(Collections.RECEIVABLE_COLLECTIONS, newCollection);
+  };
+
+  const handleUpdateCollectionStatus = async (collectionId: string, status: Collection['status']) => {
+    const col = collections.find(c => c.id === collectionId);
+    if (!col) return;
+
+    const updatedCol = { ...col, status };
+    await saveRecordToFirestore(Collections.RECEIVABLE_COLLECTIONS, updatedCol);
+
+    if (status === 'CLEARED') {
+      // Reconcile Invoice! Set status of invoice to PAID
+      const targetIds = col.invoiceIds && col.invoiceIds.length > 0 ? col.invoiceIds : [col.invoiceId];
+      const invoicesToUpdate = invoices.filter(inv => targetIds.includes(inv.id));
+      for (const inv of invoicesToUpdate) {
+        await saveRecordToFirestore(Collections.INVOICES, { ...inv, status: 'PAID' });
       }
-      return inv;
-    }));
-  };
 
-  const handleSyncInvoiceQBO = (invId: string, qboId: string) => {
-    setInvoices(invoices.map(inv => {
-      if (inv.id === invId) return { ...inv, qboId };
-      return inv;
-    }));
-  };
-
-  const handleUpdateVendorBank = (vendorId: string, bankName: string, accountNo: string, routingNo: string) => {
-    setVendors(vendors.map(v => {
-      if (v.id === vendorId) {
-        return {
-          ...v,
-          bankDetails: { bankName, accountNo, routingNo }
-        };
+      // Post double-entry journal postings in simulated Chart of Accounts
+      const codesToUpdate = ['1001', '1102', '1103', '1101'];
+      const ledgersToUpdate = detailLedgers.filter(led => codesToUpdate.includes(led.code));
+      for (const led of ledgersToUpdate) {
+        let nextBal = led.balance;
+        if (led.code === '1001') nextBal += col.netCollected;
+        if (led.code === '1102') nextBal += col.vdsDeduction;
+        if (led.code === '1103') nextBal += col.tdsDeduction;
+        if (led.code === '1101') nextBal -= col.invoiceAmount;
+        await saveRecordToFirestore(Collections.DETAIL_LEDGERS, { ...led, balance: nextBal });
       }
-      return v;
-    }));
+    }
   };
 
-  const handleSubmitBill = (billData: Omit<VendorBill, 'id' | 'createdAt'>) => {
+  const handleAddMotherLedger = async (mlData: Omit<MotherLedger, 'id' | 'companyId'>) => {
+    const newMl: MotherLedger = {
+      ...mlData,
+      id: `ml-gen-${Math.floor(Math.random() * 89999) + 10000}`,
+      companyId: activeCompanyId
+    };
+    await saveRecordToFirestore(Collections.MOTHER_LEDGERS, newMl);
+  };
+
+  const handleAddDetailLedger = async (dlData: Omit<DetailLedger, 'id' | 'companyId'>) => {
+    const newDl: DetailLedger = {
+      ...dlData,
+      id: `dl-gen-${Math.floor(Math.random() * 89999) + 10000}`,
+      companyId: activeCompanyId
+    };
+    await saveRecordToFirestore(Collections.DETAIL_LEDGERS, newDl);
+  };
+
+  const handleUpdateVendorBank = async (vendorId: string, bankName: string, accountNo: string, routingNo: string) => {
+    const v = vendors.find(vendor => vendor.id === vendorId);
+    if (v) {
+      await saveRecordToFirestore(Collections.VENDORS, {
+        ...v,
+        bankDetails: { bankName, accountNo, routingNo }
+      });
+    }
+  };
+
+  const handleSubmitBill = async (billData: Omit<VendorBill, 'id' | 'createdAt'>) => {
     const newBill: VendorBill = {
       ...billData,
       id: `bill-gen-${Math.floor(Math.random() * 899) + 100}`,
       createdAt: new Date().toISOString()
     };
-    setBills([newBill, ...bills]);
+    await saveRecordToFirestore(Collections.VENDOR_BILLS, newBill);
   };
 
-  const handleSubmitAdvance = (advData: Omit<AdvanceRequest, 'id' | 'createdAt'>) => {
+  const handleSubmitAdvance = async (advData: Omit<AdvanceRequest, 'id' | 'createdAt'>) => {
     const newAdv: AdvanceRequest = {
       ...advData,
       id: `adv-gen-${Math.floor(Math.random() * 899) + 100}`,
       createdAt: new Date().toISOString()
     };
-    setAdvanceRequests([newAdv, ...advanceRequests]);
+    await saveRecordToFirestore(Collections.ADVANCE_REQUESTS, newAdv);
   };
 
-  const handleCreatePayment = (payData: Omit<Payment, 'id' | 'companyId' | 'createdAt'>) => {
+  const handleCreatePayment = async (payData: Omit<Payment, 'id' | 'companyId' | 'createdAt'>) => {
     const newPay: Payment = {
       ...payData,
       id: `pay-gen-${Math.floor(Math.random() * 899) + 100}`,
       companyId: activeCompanyId,
       createdAt: new Date().toISOString()
     };
-    setPayments([newPay, ...payments]);
+    await saveRecordToFirestore(Collections.PAYMENTS, newPay);
   };
 
-  const handleApprovePayment = (payId: string, approverId: string) => {
+  const handleApprovePayment = async (payId: string, approverId: string) => {
     const pay = payments.find(p => p.id === payId);
     if (!pay) return;
 
-    setPayments(payments.map(p => {
-      if (p.id === payId) return { ...p, status: 'PAID', financeManagerApproverId: approverId };
-      return p;
-    }));
+    await saveRecordToFirestore(Collections.PAYMENTS, { ...pay, status: 'PAID', financeManagerApproverId: approverId });
 
     // Mark linked Vendor Bill as PAID and trigger cost incurred on Project
     if (pay.vendorBillId) {
-      setBills(bills.map(b => {
-        if (b.id === pay.vendorBillId) return { ...b, status: 'PAID' };
-        return b;
-      }));
-
       const bill = bills.find(b => b.id === pay.vendorBillId);
-      const wo = workOrders.find(w => w.id === bill?.workOrderId);
-      if (wo) {
-        setProjects(projects.map(p => {
-          if (p.id === wo.projectId) {
-            return {
+      if (bill) {
+        await saveRecordToFirestore(Collections.VENDOR_BILLS, { ...bill, status: 'PAID' });
+        const wo = workOrders.find(w => w.id === bill.workOrderId);
+        if (wo) {
+          const p = projects.find(proj => proj.id === wo.projectId);
+          if (p) {
+            await saveRecordToFirestore(Collections.PROJECTS, {
               ...p,
               costIncurred: p.costIncurred + pay.amount
-            };
+            });
           }
-          return p;
-        }));
+        }
       }
     }
   };
 
-  const handleRejectPayment = (payId: string) => {
-    setPayments(payments.map(p => {
-      if (p.id === payId) return { ...p, status: 'REJECTED' };
-      return p;
-    }));
+  const handleRejectPayment = async (payId: string) => {
+    const pay = payments.find(p => p.id === payId);
+    if (pay) {
+      await saveRecordToFirestore(Collections.PAYMENTS, { ...pay, status: 'REJECTED' });
+    }
   };
 
-  const handleSyncPaymentQBO = (payId: string, qboId: string) => {
-    setPayments(payments.map(p => {
-      if (p.id === payId) return { ...p, qboId };
-      return p;
-    }));
+  const handleSyncPaymentQBO = async (payId: string, qboId: string) => {
+    const pay = payments.find(p => p.id === payId);
+    if (pay) {
+      await saveRecordToFirestore(Collections.PAYMENTS, { ...pay, qboId });
+    }
   };
 
-  const handleVerifyVatDocs = (billId: string) => {
-    setBills(bills.map(b => {
-      if (b.id === billId) {
-        return {
-          ...b,
-          grnGenerated: true,
-          hardcopyReceivedConfirmation: true,
-          status: 'VAT_VERIFIED'
-        };
-      }
-      return b;
-    }));
+  const handleVerifyVatDocs = async (billId: string) => {
+    const b = bills.find(bill => bill.id === billId);
+    if (b) {
+      await saveRecordToFirestore(Collections.VENDOR_BILLS, {
+        ...b,
+        grnGenerated: true,
+        hardcopyReceivedConfirmation: true,
+        status: 'VAT_VERIFIED'
+      });
+    }
   };
 
-  const handleCreateClient = (clientData: Omit<Client, 'id' | 'companyId' | 'isApproved' | 'createdBy'>) => {
+  const handleCreateClient = async (clientData: Omit<Client, 'id' | 'companyId' | 'isApproved' | 'createdBy'>) => {
     const newClient: Client = {
       ...clientData,
       id: `cli-${Date.now()}`,
@@ -639,34 +920,40 @@ export default function App() {
       isApproved: false, // Pending initially for CS User
       createdBy: currentUser.name
     };
-    setClients(prev => [...prev, newClient]);
+    await saveRecordToFirestore('clients', newClient);
   };
 
-  const handleApproveClient = (clientId: string) => {
-    setClients(prev => prev.map(c => {
-      if (c.id === clientId) {
-        return {
-          ...c,
-          isApproved: true,
-          approvedBy: currentUser.name
-        };
-      }
-      return c;
-    }));
+  const handleApproveClient = async (clientId: string) => {
+    const c = clients.find(cli => cli.id === clientId);
+    if (c) {
+      await saveRecordToFirestore('clients', {
+        ...c,
+        isApproved: true,
+        approvedBy: currentUser.name
+      });
+    }
   };
 
-  const handleUpdateCompany = (companyData: Partial<Company>) => {
-    setCompanies(companies.map(c => {
-      if (c.id === activeCompanyId) {
-        return {
-          ...c,
-          ...companyData,
-          bankDetails: companyData.bankDetails ? { ...c.bankDetails, ...companyData.bankDetails } : c.bankDetails,
-          templates: companyData.templates ? { ...c.templates, ...companyData.templates } : c.templates
-        };
-      }
-      return c;
-    }));
+  const handleUpdateClient = async (clientId: string, updatedData: Partial<Client>) => {
+    const c = clients.find(cli => cli.id === clientId);
+    if (c) {
+      await saveRecordToFirestore('clients', {
+        ...c,
+        ...updatedData
+      });
+    }
+  };
+
+  const handleUpdateCompany = async (companyData: Partial<Company>) => {
+    const c = companies.find(comp => comp.id === activeCompanyId);
+    if (c) {
+      await saveRecordToFirestore(Collections.COMPANIES, {
+        ...c,
+        ...companyData,
+        bankDetails: companyData.bankDetails ? { ...c.bankDetails, ...companyData.bankDetails } : c.bankDetails,
+        templates: companyData.templates ? { ...c.templates, ...companyData.templates } : c.templates
+      });
+    }
   };
 
   // ----------------- MULTI-TENANT FILTERED COLLECTIONS -----------------
@@ -733,6 +1020,9 @@ export default function App() {
   const filteredPayments = payments.filter(p => p.companyId === activeCompanyId);
   const filteredClients = clients.filter(c => c.companyId === activeCompanyId);
   const filteredUsers = users.filter(u => u.companyId === activeCompanyId);
+  const filteredCollections = collections.filter(c => c.companyId === activeCompanyId);
+  const filteredMotherLedgers = motherLedgers.filter(m => m.companyId === activeCompanyId);
+  const filteredDetailLedgers = detailLedgers.filter(d => d.companyId === activeCompanyId);
 
   // KPI calculations
   const totalRevenue = filteredProjects.reduce((acc, proj) => {
@@ -785,6 +1075,18 @@ export default function App() {
     .reduce((acc, curr) => acc + curr.totalAmount, 0);
 
   const pendingPaymentsCount = filteredPayments.filter(p => p.status === 'PENDING_APPROVAL').length;
+
+  const overdueInvoiceAmount = filteredInvoices
+    .filter(inv => {
+      if (inv.status === 'PAID' || inv.status === 'CANCELLED') return false;
+      if (!inv.dueDate) return false;
+      const dueDate = new Date(inv.dueDate);
+      const today = new Date();
+      dueDate.setHours(0, 0, 0, 0);
+      today.setHours(0, 0, 0, 0);
+      return dueDate < today;
+    })
+    .reduce((acc, curr) => acc + curr.totalAmount, 0);
 
   if (!isLoggedIn) {
     return (
@@ -1057,6 +1359,30 @@ export default function App() {
                 </button>
               )}
 
+              {isAllowedTab('collections') && (
+                <button
+                  onClick={() => setActiveTab('collections')}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    activeTab === 'collections' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-zinc-800 text-zinc-400 hover:text-white border border-transparent'
+                  }`}
+                >
+                  <Coins className="w-4 h-4 text-amber-400" />
+                  <span>Receivable Collections</span>
+                </button>
+              )}
+
+              {isAllowedTab('chart-of-accounts') && (
+                <button
+                  onClick={() => setActiveTab('chart-of-accounts')}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    activeTab === 'chart-of-accounts' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-zinc-800 text-zinc-400 hover:text-white border border-transparent'
+                  }`}
+                >
+                  <Database className="w-4 h-4 text-emerald-400" />
+                  <span>Chart of Accounts (CoA)</span>
+                </button>
+              )}
+
               {isAllowedTab('document-hub') && (
                 <button
                   onClick={() => setActiveTab('document-hub')}
@@ -1177,7 +1503,7 @@ export default function App() {
               </div>
 
               {/* KPI metrics row */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
                 <div className="bg-white border border-zinc-200 p-4 rounded-xl flex items-center justify-between shadow-xs">
                   <div>
                     <span className="text-xs font-semibold text-zinc-400 block uppercase">Total Revenue</span>
@@ -1205,6 +1531,16 @@ export default function App() {
                   </div>
                   <div className="bg-indigo-50 text-indigo-600 p-2.5 rounded-lg border border-indigo-100">
                     <LayoutDashboard className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="bg-white border border-zinc-200 p-4 rounded-xl flex items-center justify-between shadow-xs">
+                  <div>
+                    <span className="text-xs font-semibold text-zinc-400 block uppercase">Overdue Invoices</span>
+                    <span className="text-lg font-bold text-rose-600 mt-1">{currentCompany.currency || 'BDT'} {overdueInvoiceAmount.toLocaleString()}</span>
+                  </div>
+                  <div className="bg-rose-50 text-rose-600 p-2.5 rounded-lg border border-rose-100">
+                    <AlertTriangle className="w-5 h-5" />
                   </div>
                 </div>
 
@@ -1308,6 +1644,7 @@ export default function App() {
               onToggleSidebar={() => setIsSidebarHidden(!isSidebarHidden)}
               onCreateClient={handleCreateClient}
               onApproveClient={handleApproveClient}
+              onUpdateClient={handleUpdateClient}
               onCreateEstimate={handleCreateEstimate}
               onApproveEstimate={handleApproveEstimate}
               onApproveFinanceEstimate={handleApproveFinanceEstimate}
@@ -1327,7 +1664,16 @@ export default function App() {
           {activeTab === 'labor-rates' && (
             <LaborRateCardModule
               laborRates={laborRates}
-              onUpdateLaborRates={setLaborRates}
+              onUpdateLaborRates={async (newRates) => {
+                const currentIds = newRates.map(r => r.id);
+                const deletedRates = laborRates.filter(r => !currentIds.includes(r.id));
+                for (const r of deletedRates) {
+                  await deleteRecordFromFirestore('laborrates', r.id);
+                }
+                for (const r of newRates) {
+                  await saveRecordToFirestore('laborrates', r);
+                }
+              }}
               currency={currentCompany.currency || 'BDT'}
             />
           )}
@@ -1339,6 +1685,7 @@ export default function App() {
               projects={filteredProjects}
               currentUser={currentUser}
               company={currentCompany}
+              clients={clients}
               onCreateInvoice={handleCreateInvoice}
               onUpdateInvoice={handleUpdateInvoice}
               onSyncQBO={handleSyncInvoiceQBO}
@@ -1361,6 +1708,30 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'collections' && (
+            <CollectionsModule
+              collections={filteredCollections}
+              invoices={filteredInvoices}
+              clients={filteredClients}
+              estimates={filteredEstimates}
+              currentUser={currentUser}
+              company={currentCompany}
+              onCreateCollection={handleCreateCollection}
+              onUpdateCollectionStatus={handleUpdateCollectionStatus}
+            />
+          )}
+
+          {activeTab === 'chart-of-accounts' && (
+            <ChartOfAccountsModule
+              motherLedgers={filteredMotherLedgers}
+              detailLedgers={filteredDetailLedgers}
+              company={currentCompany}
+              currentUser={currentUser}
+              onAddMotherLedger={handleAddMotherLedger}
+              onAddDetailLedger={handleAddDetailLedger}
+            />
+          )}
+
           {activeTab === 'document-hub' && (
             <DocumentStorageModule
               files={files}
@@ -1369,11 +1740,18 @@ export default function App() {
               estimates={filteredEstimates}
               currentUser={currentUser}
               companyCurrency={currentCompany.currency}
-              onUploadFile={(newFile) => setFiles([newFile, ...files])}
-              onDeleteFile={(fileId) => setFiles(files.filter(f => f.id !== fileId))}
-              onUpdateFileMetadata={(fileId, updatedFields) => 
-                setFiles(files.map(f => f.id === fileId ? { ...f, ...updatedFields } : f))
-              }
+              onUploadFile={async (newFile) => {
+                await saveRecordToFirestore('files', newFile);
+              }}
+              onDeleteFile={async (fileId) => {
+                await deleteRecordFromFirestore('files', fileId);
+              }}
+              onUpdateFileMetadata={async (fileId, updatedFields) => {
+                const f = files.find(file => file.id === fileId);
+                if (f) {
+                  await saveRecordToFirestore('files', { ...f, ...updatedFields });
+                }
+              }}
             />
           )}
 
@@ -1413,8 +1791,12 @@ export default function App() {
             <MasterAdminPanel
               companies={companies}
               users={users}
-              onAddCompany={(newComp) => setCompanies([...companies, newComp])}
-              onAddUser={(newUser) => setUsers([...users, newUser])}
+              onAddCompany={async (newComp) => {
+                await saveRecordToFirestore(Collections.COMPANIES, newComp);
+              }}
+              onAddUser={async (newUser) => {
+                await saveRecordToFirestore(Collections.USERS, newUser);
+              }}
             />
           )}
 
@@ -1422,7 +1804,9 @@ export default function App() {
             <UserManagementPanel
               users={users}
               activeCompanyId={activeCompanyId}
-              onAddUser={(newUser) => setUsers([...users, newUser])}
+              onAddUser={async (newUser) => {
+                await saveRecordToFirestore(Collections.USERS, newUser);
+              }}
               companies={companies}
             />
           )}

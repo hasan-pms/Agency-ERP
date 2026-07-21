@@ -126,6 +126,7 @@ export interface Invoice {
   csUserId: string;
   financeReceiptCopyUrl?: string;
   receiptDate?: string;
+  dueDate?: string; // Automatically calculated based on client credit line / payment terms
   paymentAdjustments: {
     taxRate: number; // percentage
     vatRate: number; // percentage
@@ -210,6 +211,7 @@ export interface Client {
   name: string;
   address: string;
   isApproved: boolean;
+  creditDays?: number; // Payment terms in days (e.g. 30 for Net 30, 0 for immediate/Cash)
   createdBy?: string;
   approvedBy?: string;
 }
@@ -230,5 +232,67 @@ export interface StoredFile {
   tags?: string[];
   isConfidential?: boolean;
 }
+
+export interface Collection {
+  id: string;
+  companyId: string;
+  invoiceId: string;
+  invoiceRef: string;
+  invoiceIds?: string[]; // Multiple invoice support
+  clientName: string;
+  invoiceAmount: number;
+  vdsDeduction: number; // VAT Deducted at Source
+  tdsDeduction: number; // Tax Deducted at Source
+  otherDeduction: number;
+  otherDeductionReason?: string;
+  netCollected: number; // final collected amount
+  collectionDate: string;
+  paymentMethod: string; // 'Bank Transfer', 'Cheque', 'Cash', 'Other'
+  referenceNo: string; // Cheque/Transaction reference
+  status: 'PENDING_CLEARING' | 'CLEARED' | 'REJECTED';
+  recordedBy: string; // user name/id
+  remarks?: string;
+  createdAt: string;
+}
+
+export type AccountGroup = 'ASSETS' | 'LIABILITIES' | 'EQUITY' | 'REVENUE' | 'EXPENSES';
+
+export interface MotherLedger {
+  id: string;
+  companyId: string;
+  group: AccountGroup;
+  code: string; // e.g., 1100, 1200
+  name: string; // e.g., Cash & Cash Equivalents, Accounts Receivable
+  description?: string;
+}
+
+export interface DetailLedger {
+  id: string;
+  companyId: string;
+  motherLedgerId: string;
+  code: string; // e.g., 1101, 1102, 1201
+  name: string; // e.g., Prime Bank Current A/C, Dhaka Bank
+  description?: string;
+  balance: number; // current simulated ledger balance
+  currency: string;
+}
+
+export interface JournalEntryLine {
+  ledgerId: string;
+  ledgerName: string;
+  type: 'DEBIT' | 'CREDIT';
+  amount: number;
+}
+
+export interface JournalEntry {
+  id: string;
+  companyId: string;
+  referenceNo: string;
+  date: string;
+  description: string;
+  lines: JournalEntryLine[];
+  createdAt: string;
+}
+
 
 

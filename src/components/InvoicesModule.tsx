@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Invoice, Estimate, Project, User, Company, InvoiceLineItem, UserRole } from '../types';
+import { Invoice, Estimate, Project, User, Company, InvoiceLineItem, UserRole, Client } from '../types';
 import { 
   FileText, 
   Eye, 
@@ -31,6 +31,7 @@ interface InvoicesModuleProps {
   projects: Project[];
   currentUser: User;
   company: Company;
+  clients: Client[];
   onCreateInvoice: (invoice: Omit<Invoice, 'id' | 'companyId' | 'createdAt'>) => void;
   onUpdateInvoice: (invoiceId: string, updatedData: Partial<Invoice>) => void;
   onSyncQBO: (invoiceId: string, qboId: string) => void;
@@ -55,6 +56,7 @@ export default function InvoicesModule({
   projects,
   currentUser,
   company,
+  clients = [],
   onCreateInvoice,
   onUpdateInvoice,
   onSyncQBO,
@@ -71,6 +73,7 @@ export default function InvoicesModule({
     subtotal: 130,
     adjustments: 160,
     grandTotal: 140,
+    due: 140,
     receipt: 130,
     sync: 130,
     status: 120,
@@ -116,6 +119,7 @@ export default function InvoicesModule({
   const [editingVatRate, setEditingVatRate] = useState(7);
   const [editingOtherCharges, setEditingOtherCharges] = useState(0);
   const [editingStatus, setEditingStatus] = useState<Invoice['status']>('DRAFT');
+  const [editingDueDate, setEditingDueDate] = useState('');
 
   // Preview & uploads
   const [activePreviewHTML, setActivePreviewHTML] = useState<string | null>(null);
@@ -290,6 +294,15 @@ export default function InvoicesModule({
       return;
     }
 
+    // Automatically calculate due date based on client's creditDays terms
+    let clientObj: Client | undefined = undefined;
+    const firstEst = estimates.find(est => est.id === selectedEstimateIds[0]);
+    if (firstEst) {
+      clientObj = clients.find(c => c.name.toLowerCase() === firstEst.clientName?.toLowerCase());
+    }
+    const creditDays = clientObj?.creditDays !== undefined ? clientObj.creditDays : 30; // default to Net 30 if not specified
+    const dueDate = new Date(Date.now() + creditDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
     onCreateInvoice({
       estimateIds: selectedEstimateIds,
       csUserId: currentUser.id,
@@ -299,6 +312,7 @@ export default function InvoicesModule({
         otherCharges
       },
       status: 'DRAFT', // Starts as DRAFT, routing to Finance team queue for approval & review
+      dueDate,
       lineItems: selectedLines.map(item => ({
         id: item.id,
         description: item.description,
@@ -335,6 +349,7 @@ export default function InvoicesModule({
     setEditingVatRate(inv.paymentAdjustments.vatRate);
     setEditingOtherCharges(inv.paymentAdjustments.otherCharges);
     setEditingStatus(inv.status);
+    setEditingDueDate(inv.dueDate || '');
     setShowEditModal(true);
   };
 
@@ -394,7 +409,8 @@ export default function InvoicesModule({
       taxAmount: editTaxAmount,
       vatAmount: editVatAmount,
       totalAmount: editGrandTotal,
-      status: editingStatus
+      status: editingStatus,
+      dueDate: editingDueDate || undefined
     });
 
     setShowEditModal(false);
@@ -634,6 +650,13 @@ export default function InvoicesModule({
                     className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
                   />
                 </th>
+                <th className="p-4 text-center relative group" style={{ width: colWidths.due }}>
+                  <span className="truncate block px-2">Due Date</span>
+                  <div
+                    onMouseDown={(e) => handleMouseDown('due', e)}
+                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 bg-transparent active:bg-indigo-600 transition-colors z-10 select-none border-r border-zinc-200/50"
+                  />
+                </th>
                 <th className="p-4 text-center relative group" style={{ width: colWidths.receipt }}>
                   <span className="truncate block px-2">Receipt File</span>
                   <div
@@ -667,7 +690,7 @@ export default function InvoicesModule({
             <tbody className="divide-y divide-zinc-100 text-zinc-700">
               {filteredInvoices.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="p-8 text-center text-zinc-400 italic">No invoices match your filter criteria.</td>
+                  <td colSpan={10} className="p-8 text-center text-zinc-400 italic">No invoices match your filter criteria.</td>
                 </tr>
               ) : (
                 filteredInvoices.map((inv) => {
@@ -691,6 +714,14 @@ export default function InvoicesModule({
                         <div className="truncate font-semibold">VAT: {inv.paymentAdjustments.vatRate}% (+{inv.vatAmount.toLocaleString()})</div>
                       </td>
                       <td className="p-4 text-right font-bold text-zinc-900 truncate whitespace-nowrap" title={`${company.currency || 'BDT'} ${inv.totalAmount.toLocaleString()}`}>{company.currency || 'BDT'} {inv.totalAmount.toLocaleString()}</td>
+                      <td className="p-4 text-center truncate whitespace-nowrap">
+                        <div className="font-semibold text-zinc-800 text-xs">
+                          {inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Immediate'}
+                        </div>
+                        <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                          Issued: {new Date(inv.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </div>
+                      </td>
                       <td className="p-4 text-center truncate whitespace-nowrap">
                         {inv.financeReceiptCopyUrl ? (
                           <a
@@ -1179,7 +1210,7 @@ export default function InvoicesModule({
                 </div>
 
                 {/* Edit Adjustments */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-zinc-50 p-4 rounded-xl border border-zinc-100">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-zinc-50 p-4 rounded-xl border border-zinc-100">
                   <div>
                     <label className="block text-xs font-semibold text-zinc-700 mb-1">VAT rate (%)</label>
                     <input 
@@ -1203,6 +1234,15 @@ export default function InvoicesModule({
                       <option value="PAID">PAID</option>
                       <option value="CANCELLED">CANCELLED</option>
                     </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 mb-1">Due Date</label>
+                    <input 
+                      type="date"
+                      value={editingDueDate}
+                      onChange={(e) => setEditingDueDate(e.target.value)}
+                      className="w-full p-2 bg-white border border-zinc-300 rounded-lg text-sm focus:outline-hidden"
+                    />
                   </div>
                 </div>
 
