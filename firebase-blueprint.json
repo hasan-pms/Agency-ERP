@@ -1,0 +1,225 @@
+{
+  "entities": {
+    "Company": {
+      "title": "Company",
+      "description": "Company profile details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "User": {
+      "title": "User",
+      "description": "System user account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["id", "email", "role"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "A client project",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "clientName": { "type": "string" }
+      },
+      "required": ["id", "name", "clientName"]
+    },
+    "Estimate": {
+      "title": "Estimate",
+      "description": "A client proposal or project estimate",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "projectId": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Invoice billing document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "Vendor": {
+      "title": "Vendor",
+      "description": "Third-party vendor profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "WorkOrder": {
+      "title": "WorkOrder",
+      "description": "Work order document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "VendorBill": {
+      "title": "VendorBill",
+      "description": "Bill from a vendor",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "AdvanceRequest": {
+      "title": "AdvanceRequest",
+      "description": "Cash advance request document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Payment record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "Collection": {
+      "title": "Collection",
+      "description": "Receivable collection transaction record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "MotherLedger": {
+      "title": "MotherLedger",
+      "description": "General Ledger category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "DetailLedger": {
+      "title": "DetailLedger",
+      "description": "Specific detail ledger account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Client profile registry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "StoredFile": {
+      "title": "StoredFile",
+      "description": "Metadata for uploaded files and receipts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "LaborRate": {
+      "title": "LaborRate",
+      "description": "Designation hourly labor rate configurations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "designation": { "type": "string" },
+        "department": { "type": "string" },
+        "hourlyRate": { "type": "number" }
+      },
+      "required": ["id", "designation", "department", "hourlyRate"]
+    }
+  },
+  "firestore": {
+    "/companies/{companyId}": {
+      "schema": "Company",
+      "description": "Core company directory"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "App users list"
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Project listings"
+    },
+    "/estimates/{estimateId}": {
+      "schema": "Estimate",
+      "description": "Financial and work estimates"
+    },
+    "/invoices/{invoiceId}": {
+      "schema": "Invoice",
+      "description": "Client billing invoices"
+    },
+    "/vendors/{vendorId}": {
+      "schema": "Vendor",
+      "description": "Supplier and vendor database"
+    },
+    "/workorders/{workOrderId}": {
+      "schema": "WorkOrder",
+      "description": "Work assignments"
+    },
+    "/vendorbills/{billId}": {
+      "schema": "VendorBill",
+      "description": "Incoming bills from vendors"
+    },
+    "/advancerequests/{requestId}": {
+      "schema": "AdvanceRequest",
+      "description": "Advance cash requests"
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Disbursement and payment logs"
+    },
+    "/collections/{collectionId}": {
+      "schema": "Collection",
+      "description": "Accounts receivable collection tracking"
+    },
+    "/motherledgers/{ledgerId}": {
+      "schema": "MotherLedger",
+      "description": "General accounting ledger nodes"
+    },
+    "/detailledgers/{ledgerId}": {
+      "schema": "DetailLedger",
+      "description": "Granular accounting ledger ledger"
+    },
+    "/clients/{clientId}": {
+      "schema": "Client",
+      "description": "CRM client profiles"
+    },
+    "/files/{fileId}": {
+      "schema": "StoredFile",
+      "description": "Document storage registry"
+    },
+    "/laborrates/{rateId}": {
+      "schema": "LaborRate",
+      "description": "Hourly labor rate definitions"
+    }
+  }
+}

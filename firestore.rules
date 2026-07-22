@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Explicit permissions for each active collection in Agency ERP
+    match /companies/{companyId} {
+      allow read, write: if true;
+    }
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+    match /projects/{projectId} {
+      allow read, write: if true;
+    }
+    match /estimates/{estimateId} {
+      allow read, write: if true;
+    }
+    match /invoices/{invoiceId} {
+      allow read, write: if true;
+    }
+    match /vendors/{vendorId} {
+      allow read, write: if true;
+    }
+    match /workorders/{workOrderId} {
+      allow read, write: if true;
+    }
+    match /vendorbills/{billId} {
+      allow read, write: if true;
+    }
+    match /advancerequests/{requestId} {
+      allow read, write: if true;
+    }
+    match /payments/{paymentId} {
+      allow read, write: if true;
+    }
+    match /collections/{collectionId} {
+      allow read, write: if true;
+    }
+    match /motherledgers/{ledgerId} {
+      allow read, write: if true;
+    }
+    match /detailledgers/{ledgerId} {
+      allow read, write: if true;
+    }
+    match /clients/{clientId} {
+      allow read, write: if true;
+    }
+    match /files/{fileId} {
+      allow read, write: if true;
+    }
+    match /laborrates/{rateId} {
+      allow read, write: if true;
+    }
+  }
+}
